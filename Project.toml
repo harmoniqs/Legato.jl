@@ -4,6 +4,7 @@ version = "0.4.0"
 authors = ["Aaron Trowbridge <aaron@harmoniqs.co> and contributors"]
 
 [deps]
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Piccolo = "c4671d76-df94-11ed-2057-43d4fd632fad"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
@@ -11,8 +12,17 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
 TestItems = "1c621080-faea-4a02-84b6-bbd5e436b8fe"
 
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+StrettoMakieExt = ["Makie"]
+
 [compat]
+CairoMakie = "0.15"
+FFTW = "1"
 LinearAlgebra = "1.10, 1.11, 1.12"
+Makie = "0.24"
 Piccolo = "1.6"
 Printf = "1.10, 1.11, 1.12"
 TOML = "1.0"
@@ -21,7 +31,8 @@ TestItems = "1.0"
 julia = "1.10, 1.11, 1.12"
 
 [extras]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["CairoMakie", "Test"]
