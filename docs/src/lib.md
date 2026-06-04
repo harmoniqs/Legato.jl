@@ -27,7 +27,7 @@ cx q[0], q[1];
 circuit = from_qasm(qasm)
 ```
 
-Supported input includes qubit declarations, the official `stdgates.inc` gate names, constant numeric gate parameters, whole-register broadcasting, barriers, no-ops, and 0-based QASM qubit indices converted to Stretto's 1-based indices.
+Parsing and static OpenQASM evaluation are handled by [Quasar.jl](https://github.com/kshyatt-aws/Quasar.jl). Stretto then lowers the resulting unitary instructions into `GateOp`s. Supported input includes qubit and `qreg` declarations, the official `stdgates.inc` gate names, constant numeric gate parameters, whole-register broadcasting, register ranges, custom gate definitions, static loops and conditionals, barriers, no-ops, gate modifiers that resolve to finite unitary matrices, and 0-based QASM qubit indices converted to Stretto's 1-based indices.
 
 The gate list and syntax boundaries are anchored to these OpenQASM sources:
 
@@ -43,7 +43,7 @@ Supported gate coverage:
 - OpenQASM 3 built-in unitary instructions: `U` and `gphase`.
 - Stretto compatibility names accepted in addition to the standard list: `cnot`, `toffoli`, and `ccz`.
 
-Unsupported OpenQASM features fail with `ArgumentError` when they do not have a `GateCircuit` equivalent: measurements, resets, dynamic classical control, loops, custom gate definitions, calibration/OpenPulse blocks, timing statements, gate modifiers, register slices, and arbitrary include files.
+Unsupported OpenQASM features fail with `ArgumentError` when they do not have a `GateCircuit` equivalent or would lose semantics during lowering: measurements, resets, dynamic measurement-dependent classical behavior, calibration/OpenPulse blocks, timing and `box` constructs, arbitrary include files, and non-integer gate-power modifiers.
 
 ```@autodocs
 Modules = [Stretto]

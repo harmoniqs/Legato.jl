@@ -2,6 +2,7 @@ module Stretto
 
 using LinearAlgebra
 using Printf
+using Quasar
 using TOML
 using TestItems
 

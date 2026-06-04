@@ -1,5 +1,5 @@
 # ============================================================================ #
-# OpenQASM 3 source-anchored gate tables
+# OpenQASM 3 source-anchored gate tables and Quasar lowering
 #
 # Source links used for this mapping:
 # - OpenQASM standard library (`stdgates.inc` gate names and definitions;
@@ -11,7 +11,9 @@
 # - OpenQASM 3.0 language reference:
 #   https://openqasm.com/versions/3.0/index.html
 #
-# Stretto only accepts syntax that can lower to a static unitary GateCircuit.
+# Quasar handles OpenQASM parsing and static AST evaluation. Stretto owns the
+# final lowering step into GateCircuit, so syntax that cannot become a static
+# unitary still fails here with ArgumentError.
 # Keep QASM_STDGATES_3_GATE_NAMES aligned with the standard-library docs; the
 # :qasm testitems at the end of this file assert the implementation table.
 # ============================================================================ #
@@ -139,28 +141,27 @@ const QASM_STDGATES_3_GATE_NAMES = Set([
 
 const QASM_BUILTIN_GATE_NAMES = Set(["U", "gphase"])
 
-const QASM_NUMERIC_FUNCTIONS = Dict{String,Function}(
-    "sin" => sin,
-    "cos" => cos,
-    "tan" => tan,
-    "arcsin" => asin,
-    "arccos" => acos,
-    "arctan" => atan,
-    "sqrt" => sqrt,
-    "exp" => exp,
-    "log" => log,
-    "floor" => floor,
-    "ceiling" => ceil,
-)
+const QASM_INCLUDE_RE = r"(?i)\binclude\s+\"([^\"]+)\"\s*;"
+const QASM_STDGATES_INCLUDE_RE = r"(?i)\binclude\s+\"stdgates\.inc\"\s*;"
+const QASM_QREG_DECL_RE = r"(?m)\bqreg\s+([A-Za-z_]\w*)\s*\[\s*([^]]+)\s*\]\s*;"
+const QASM_CREG_DECL_RE = r"(?m)\bcreg\s+([A-Za-z_]\w*)\s*\[\s*([^]]+)\s*\]\s*;"
+const QASM_SUFFIX_QUBIT_DECL_RE = r"(?m)\bqubit\s+([A-Za-z_]\w*)\s*\[\s*([^]]+)\s*\]\s*;"
+const QASM_GPHASE_WITH_OPERANDS_RE = r"(?m)\bgphase\s*\([^;]*\)\s+[^;\s]"
+const QASM_VERSION_RE = r"(?im)^\s*OPENQASM\s+([0-9]+(?:\.[0-9]+)?)\s*;"
+const QASM_NOP_RE = r"(?im)(^|[;{}])\s*nop\s*;"
+const QASM_BARRIER_RE = r"(?im)(^|[;{}])\s*barrier\b[^;]*;"
+const QASM_NON_UNITARY_RE = r"(?im)(^|[;{}])\s*(?:measure|reset)\b"
+const QASM_DELAY_RE = r"(?im)(^|[;{}])\s*delay\b"
+const QASM_BOX_RE = r"(?im)(^|[;{}])\s*box\b"
+const QASM_CALIBRATION_RE = r"(?im)(^|[;{}])\s*(?:defcalgrammar|defcal|cal)\b"
 
-const QASM_CONST_RE =
-    r"^const\s+(?:(?:bit|int|uint|float|angle|bool)(?:\s*\[\s*[^]]+\s*\])?\s+)?([A-Za-z_]\w*)\s*=\s*(.+)$"
-const QASM_QUBIT_DECL_RE = r"^qubit(?:\s*\[\s*(.+?)\s*\])?\s+([A-Za-z_]\w*)(?:\s*\[\s*(.+?)\s*\])?$"
-const QASM_QREG_DECL_RE = r"^qreg\s+([A-Za-z_]\w*)(?:\s*\[\s*(.+?)\s*\])?$"
-const QASM_INCLUDE_RE = r"^include\s+\"([^\"]+)\"$"
-const QASM_QUBIT_REF_RE = r"^([A-Za-z_]\w*)(?:\[\s*(.+?)\s*\])?$"
-const QASM_PARAM_GATE_RE = r"^([A-Za-z_]\w*)\s*\((.*)\)\s*(.*)$"
-const QASM_GATE_RE = r"^([A-Za-z_]\w*)\s+(.+)$"
+const QASM_UNSUPPORTED_SOURCE_PATTERNS = (
+    (QASM_GPHASE_WITH_OPERANDS_RE, "OpenQASM `gphase` does not accept qubit operands"),
+    (QASM_NON_UNITARY_RE, "Non-unitary OpenQASM statements are not supported"),
+    (QASM_DELAY_RE, "OpenQASM timing statements are not supported"),
+    (QASM_BOX_RE, "OpenQASM box/timing constructs are not supported"),
+    (QASM_CALIBRATION_RE, "OpenQASM calibration/OpenPulse constructs are not supported"),
+)
 
 # OpenQASM spells the built-in universal gate `U`; table keys use lowercase names.
 _qasm_gate_key(gate_name::AbstractString) = gate_name == "U" ? "u" : String(gate_name)
@@ -172,344 +173,370 @@ _qasm_gate_key(gate_name::AbstractString) = gate_name == "U" ? "u" : String(gate
 """
     from_qasm(qasm::String) -> GateCircuit
 
-Parse a small OpenQASM 3 circuit into a [`GateCircuit`](@ref). Supported input
-is the static unitary subset that Stretto can represent as a `GateCircuit`:
-qubit declarations, `stdgates.inc`, fixed standard-library gates, constant
-numeric parameters, register broadcasting, and barriers/no-ops. QASM qubit
-references are converted from 0-based indices to Stretto's 1-based indices.
+Parse OpenQASM 3 into a [`GateCircuit`](@ref). Quasar.jl parses and statically
+evaluates the program; Stretto lowers the resulting unitary instructions into
+`GateOp`s. Supported input includes qubit and `qreg` declarations,
+`stdgates.inc`, fixed and constant-parameter standard-library gates, `U`,
+`gphase`, register broadcasting and ranges, custom gate definitions, static
+loops and conditionals, barriers/no-ops, and gate modifiers that resolve to a
+finite unitary matrix. QASM qubit references are converted from 0-based indices
+to Stretto's 1-based indices.
 
 OpenQASM 3 features without a `GateCircuit` equivalent -- measurements,
-resets, control flow, custom gate definitions, calibration/OpenPulse blocks,
-timing, and dynamic classical computation -- throw `ArgumentError`.
+resets, dynamic classical behavior, calibration/OpenPulse blocks, timing/box
+constructs, arbitrary include files, and non-integer gate powers -- throw
+`ArgumentError`.
 """
 function from_qasm(qasm::String)
-    source = _strip_qasm_comments(qasm)
-    statements = split(source, ';'; keepempty = false)
+    try
+        source = _qasm_source_for_quasar(qasm)
+        visitor = Quasar.QasmProgramVisitor()
+        merge!(visitor.gate_defs, _qasm_quasar_gate_definitions())
+        visitor(Quasar.parse_qasm(source))
 
-    registers = Dict{String,Vector{Int}}()
-    constants = Dict{String,Float64}()
-    ops = GateOp[]
-    n_qubits = 0
+        n_qubits = visitor.qubit_count
+        n_qubits > 0 || throw(ArgumentError("No qubit declarations found in OpenQASM input"))
 
-    for raw_statement in statements
-        statement = strip(raw_statement)
-        isempty(statement) && continue
-
-        const_declaration = _parse_qasm_const_declaration(statement, constants)
-        const_declaration !== nothing && continue
-
-        declaration = _parse_qasm_qubit_declaration(statement, n_qubits, constants)
-        if declaration !== nothing
-            name, qubits = declaration
-            haskey(registers, name) &&
-                throw(ArgumentError("Duplicate qubit register `$name` in OpenQASM input"))
-            registers[name] = qubits
-            n_qubits += length(qubits)
-            continue
+        ops = GateOp[]
+        for instruction in visitor.instructions
+            append!(ops, _lower_qasm_instruction(instruction, n_qubits))
         end
-
-        _handle_qasm_include(statement) && continue
-        _is_ignored_qasm_statement(statement) && continue
-        _throw_for_unsupported_qasm_statement(statement)
-
-        append!(ops, _parse_qasm_gate_statement(statement, registers, constants, n_qubits))
+        return GateCircuit(ops, n_qubits)
+    catch err
+        err isa ArgumentError && rethrow()
+        err isa Quasar.QasmParseError &&
+            throw(ArgumentError("Invalid OpenQASM input: $(sprint(showerror, err))"))
+        err isa Quasar.QasmVisitorError &&
+            throw(ArgumentError("Unsupported OpenQASM input: $(sprint(showerror, err))"))
+        rethrow()
     end
-
-    n_qubits > 0 || throw(ArgumentError("No qubit declarations found in OpenQASM input"))
-    return GateCircuit(ops, n_qubits)
 end
 
 # ============================================================================ #
-# Parser helpers
+# Quasar integration helpers
 # ============================================================================ #
 
-function _strip_qasm_comments(qasm::String)
-    without_blocks = replace(qasm, r"/\*[\s\S]*?\*/" => " ")
-    return join((_strip_qasm_line_comment(line) for line in split(without_blocks, '\n')), '\n')
+function _qasm_source_for_quasar(qasm::String)
+    _qasm_require_openqasm3(qasm)
+    _qasm_reject_unsupported_source(qasm)
+
+    # Quasar receives built-in gate definitions below, so the standard include
+    # can be removed after recognizing it as an allowed source dependency.
+    source = replace(qasm, QASM_STDGATES_INCLUDE_RE => "")
+
+    # `GateCircuit` has no representation for visual separators or explicit
+    # no-ops; they do not affect the unitary imported from the program.
+    source = replace(source, QASM_NOP_RE => s"\1")
+    source = replace(source, QASM_BARRIER_RE => s"\1")
+    _qasm_reject_remaining_includes(source)
+
+    # Normalize legacy/OpenQASM-2 style declarations and suffix-style qubit
+    # declarations to the declaration form consumed by Quasar.
+    source = replace(source, QASM_QREG_DECL_RE => s"qubit[\2] \1;")
+    source = replace(source, QASM_CREG_DECL_RE => s"bit[\2] \1;")
+    source = replace(source, QASM_SUFFIX_QUBIT_DECL_RE => s"qubit[\2] \1;")
+    return source
 end
 
-function _strip_qasm_line_comment(line::AbstractString)
-    comment_range = findfirst("//", line)
-    comment_range === nothing && return String(line)
-    comment_start = first(comment_range)
-    comment_start == firstindex(line) && return ""
-    return String(line[firstindex(line):prevind(line, comment_start)])
-end
-
-function _parse_qasm_const_declaration(statement::AbstractString, constants::Dict{String,Float64})
-    m = match(QASM_CONST_RE, statement)
-    m === nothing && return nothing
-
-    name, value_text = m.captures
-    constants[name] = _eval_qasm_numeric_expr(value_text, constants)
-    return name
-end
-
-function _parse_qasm_qubit_declaration(
-    statement::AbstractString,
-    n_qubits::Int,
-    constants::Dict{String,Float64},
-)
-    m = match(QASM_QUBIT_DECL_RE, statement)
-    if m !== nothing
-        prefix_size, name, suffix_size = m.captures
-        prefix_size !== nothing &&
-            suffix_size !== nothing &&
-            throw(
-                ArgumentError(
-                    "Qubit register `$name` cannot use both `qubit[n] q` and `qubit q[n]` syntax",
-                ),
-            )
-        size_text = prefix_size === nothing ? suffix_size : prefix_size
-        return _qasm_register_qubits(name, size_text, n_qubits, constants)
+function _qasm_reject_unsupported_source(qasm::AbstractString)
+    for (pattern, message) in QASM_UNSUPPORTED_SOURCE_PATTERNS
+        occursin(pattern, qasm) && throw(ArgumentError(message))
     end
-
-    m = match(QASM_QREG_DECL_RE, statement)
-    m === nothing && return nothing
-
-    name, size_text = m.captures
-    return _qasm_register_qubits(name, size_text, n_qubits, constants)
-end
-
-function _qasm_register_qubits(
-    name::AbstractString,
-    size_text::Union{Nothing,AbstractString},
-    n_qubits::Int,
-    constants::Dict{String,Float64},
-)
-    size = size_text === nothing ? 1 : _eval_qasm_integer_expr(size_text, constants)
-    size > 0 || throw(ArgumentError("Qubit register `$name` must have positive size"))
-
-    first_qubit = n_qubits + 1
-    return name => collect(first_qubit:(first_qubit+size-1))
-end
-
-function _handle_qasm_include(statement::AbstractString)
-    m = match(QASM_INCLUDE_RE, statement)
-    m === nothing && return false
-
-    path = only(m.captures)
-    path == "stdgates.inc" || throw(
-        ArgumentError(
-            "Only `include \"stdgates.inc\";` is supported; cannot resolve include `$path`",
-        ),
-    )
-    return true
-end
-
-function _is_ignored_qasm_statement(statement::AbstractString)
-    lowered = lowercase(statement)
-    return startswith(lowered, "openqasm ") ||
-           startswith(lowered, "pragma ") ||
-           lowered == "barrier" ||
-           startswith(lowered, "barrier ") ||
-           lowered == "nop" ||
-           occursin(r"^(bit|creg)\b", lowered)
-end
-
-function _throw_for_unsupported_qasm_statement(statement::AbstractString)
-    lowered = lowercase(statement)
-    occursin(r"\b(measure|reset)\b", lowered) &&
-        throw(ArgumentError("Non-unitary OpenQASM statements are not supported: `$statement`"))
-    startswith(lowered, "defcalgrammar ") &&
-        throw(ArgumentError("OpenQASM calibration grammar declarations are not supported"))
-    startswith(lowered, "defcal ") &&
-        throw(ArgumentError("OpenQASM calibration definitions are not supported"))
-    startswith(lowered, "cal ") &&
-        throw(ArgumentError("OpenQASM calibration blocks are not supported"))
-    startswith(lowered, "gate ") &&
-        throw(ArgumentError("Custom OpenQASM gate definitions are not supported"))
-    startswith(lowered, "def ") && throw(ArgumentError("OpenQASM subroutines are not supported"))
-    startswith(lowered, "extern ") &&
-        throw(ArgumentError("OpenQASM extern declarations are not supported"))
-    occursin(r"^(if|for|while|switch)\b", lowered) &&
-        throw(ArgumentError("OpenQASM control flow is not supported"))
-    occursin(r"^(delay|box)\b", lowered) &&
-        throw(ArgumentError("OpenQASM timing statements are not supported"))
-    occursin("@", statement) &&
-        throw(ArgumentError("OpenQASM gate modifiers are not supported: `$statement`"))
-    occursin("{", statement) &&
-        throw(ArgumentError("Scoped OpenQASM blocks are not supported: `$statement`"))
     return nothing
 end
 
-function _parse_qasm_gate_statement(
-    statement::AbstractString,
-    registers::Dict{String,Vector{Int}},
-    constants::Dict{String,Float64},
+function _qasm_reject_remaining_includes(source::AbstractString)
+    for m in eachmatch(QASM_INCLUDE_RE, source)
+        include_name = only(m.captures)
+        throw(
+            ArgumentError(
+                "Unsupported OpenQASM include `$include_name`; only `stdgates.inc` is understood",
+            ),
+        )
+    end
+    return nothing
+end
+
+function _qasm_require_openqasm3(qasm::AbstractString)
+    m = match(QASM_VERSION_RE, qasm)
+    m === nothing && return nothing
+
+    version = VersionNumber(only(m.captures))
+    version.major == 3 ||
+        throw(ArgumentError("Only OpenQASM 3 input is supported, got `OPENQASM $version`"))
+    return nothing
+end
+
+function _qasm_quasar_gate_definitions()
+    definitions = Dict{String,Quasar.AbstractGateDefinition}()
+
+    # These lightweight definitions let Quasar expand broadcasting, ranges,
+    # custom gates, and modifiers while preserving the gate call names for the
+    # final Stretto-specific matrix lowering below.
+    for (gate_name, gate) in QASM_FIXED_GATE_ALIASES
+        definitions[gate_name] =
+            _qasm_quasar_builtin_gate(gate_name, String[], QASM_FIXED_GATE_QUBIT_COUNTS[gate])
+    end
+
+    for (gate_name, n_qubits) in QASM_PARAMETERIZED_GATE_QUBIT_COUNTS
+        gate_name == "gphase" && continue
+        parameter_count = QASM_PARAMETERIZED_GATE_PARAMETER_COUNTS[gate_name]
+        parameters = ["p$i" for i = 1:parameter_count]
+        definitions[gate_name] = _qasm_quasar_builtin_gate(gate_name, parameters, n_qubits)
+    end
+
+    definitions["U"] = _qasm_quasar_builtin_gate("U", ["p1", "p2", "p3"], 1)
+    return definitions
+end
+
+function _qasm_quasar_builtin_gate(
+    gate_name::AbstractString,
+    parameters::Vector{String},
     n_qubits::Int,
 )
-    param_match = match(QASM_PARAM_GATE_RE, statement)
-    if param_match !== nothing
-        gate_name, parameter_text, operand_text = param_match.captures
-        gate_key, gate, expected_qubit_count =
-            _resolve_qasm_parameterized_gate(gate_name, parameter_text, constants, n_qubits)
-        if gate_key == "gphase"
-            isempty(strip(operand_text)) || throw(
-                ArgumentError("OpenQASM `gphase` does not accept qubit operands: `$statement`"),
-            )
-            return GateOp[GateOp(gate, Tuple(1:n_qubits))]
-        end
+    targets = ["q$i" for i = 1:n_qubits]
+    arguments = Quasar.InstructionArgument[Symbol(parameter) for parameter in parameters]
+    body = (
+        type = String(gate_name),
+        arguments = arguments,
+        targets = collect(0:(n_qubits-1)),
+        controls = Pair{Int,Int}[],
+        exponent = 1.0,
+    )
+    return Quasar.BuiltinGateDefinition(String(gate_name), parameters, targets, body)
+end
 
-        operands = expected_qubit_count == 0 ? String[] : _split_qasm_operands(operand_text)
-        return _expand_qasm_gate_ops(
-            gate_name,
-            gate,
-            expected_qubit_count,
-            operands,
-            registers,
-            constants,
+function _lower_qasm_instruction(instruction, n_qubits::Int)
+    instruction.type == "barrier" && return GateOp[]
+
+    if instruction.type in ("measure", "reset")
+        throw(
+            ArgumentError(
+                "Non-unitary OpenQASM statements are not supported: `$(instruction.type)`",
+            ),
+        )
+    elseif instruction.type == "delay"
+        throw(ArgumentError("OpenQASM timing statements are not supported"))
+    end
+
+    op_qubits = _qasm_instruction_qubits(instruction)
+    _qasm_validate_qubits(instruction.type, op_qubits, n_qubits)
+    gate = _qasm_instruction_gate(instruction, op_qubits)
+    return GateOp[GateOp(gate, Tuple(q + 1 for q in op_qubits))]
+end
+
+function _qasm_instruction_qubits(instruction)
+    targets = Int.(instruction.targets)
+    length(unique(targets)) == length(targets) ||
+        throw(ArgumentError("OpenQASM gate `$(instruction.type)` uses duplicate qubits"))
+
+    qubits = copy(targets)
+    for control in instruction.controls
+        control.first in qubits || pushfirst!(qubits, control.first)
+    end
+    return qubits
+end
+
+function _qasm_validate_qubits(gate_name::AbstractString, qubits::Vector{Int}, n_qubits::Int)
+    isempty(qubits) && throw(ArgumentError("OpenQASM gate `$gate_name` has no qubit context"))
+    all(q -> 0 <= q < n_qubits, qubits) ||
+        throw(ArgumentError("OpenQASM gate `$gate_name` references an out-of-range qubit"))
+    return nothing
+end
+
+function _qasm_instruction_gate(instruction, op_qubits::Vector{Int})
+    controls = _qasm_instruction_controls(instruction)
+    base_qubits = _qasm_base_qubits(instruction, controls)
+
+    # Prefer Stretto's built-in symbols whenever the instruction is exactly a
+    # supported fixed gate. Modified or parameterized gates are stored as
+    # generated matrices in EXTRA_GATES.
+    fixed_gate = get(QASM_FIXED_GATE_ALIASES, instruction.type, nothing)
+    if _qasm_can_use_fixed_gate_symbol(instruction, fixed_gate, controls)
+        _qasm_check_qubit_count(
+            instruction.type,
+            length(base_qubits),
+            QASM_FIXED_GATE_QUBIT_COUNTS[fixed_gate],
+        )
+        return fixed_gate
+    end
+
+    gate_name, matrix = _qasm_instruction_matrix(instruction, length(base_qubits))
+    matrix = _qasm_apply_exponent(matrix, instruction.exponent, instruction.type)
+    if !isempty(controls)
+        matrix = _qasm_apply_controls(
+            matrix,
+            _qasm_local_positions(base_qubits, op_qubits),
+            length(op_qubits),
+            _qasm_local_controls(controls, op_qubits),
         )
     end
 
-    m = match(QASM_GATE_RE, statement)
-    m === nothing && throw(ArgumentError("Unsupported OpenQASM statement: `$statement`"))
-
-    gate_name, operand_text = m.captures
-    gate = get(QASM_FIXED_GATE_ALIASES, gate_name, nothing)
-    gate === nothing && throw(ArgumentError("Unsupported OpenQASM gate `$gate_name`"))
-
-    operands = _split_qasm_operands(operand_text)
-    return _expand_qasm_gate_ops(
+    return _register_qasm_generated_gate(
         gate_name,
-        gate,
-        QASM_FIXED_GATE_QUBIT_COUNTS[gate],
-        operands,
-        registers,
-        constants,
+        _qasm_generated_gate_signature(instruction, controls, op_qubits),
+        matrix,
     )
 end
 
-function _expand_qasm_gate_ops(
-    gate_name::AbstractString,
-    gate::Symbol,
-    expected_qubit_count::Int,
-    operands::Vector{String},
-    registers::Dict{String,Vector{Int}},
-    constants::Dict{String,Float64},
-)
-    any(isempty, operands) &&
-        throw(ArgumentError("Invalid operands for OpenQASM gate `$gate_name`"))
-    length(operands) == expected_qubit_count || throw(
-        ArgumentError(
-            "OpenQASM gate `$gate_name` expects $expected_qubit_count qubit operand(s), got $(length(operands))",
-        ),
-    )
-
-    expected_qubit_count == 0 && return GateOp[GateOp(gate, ())]
-
-    operand_qubits = [_parse_qasm_qubit_ref(operand, registers, constants) for operand in operands]
-    broadcast_lengths = [length(qubits) for qubits in operand_qubits if length(qubits) > 1]
-    broadcast_length = isempty(broadcast_lengths) ? 1 : first(broadcast_lengths)
-    all(==(broadcast_length), broadcast_lengths) || throw(
-        ArgumentError(
-            "Broadcasted OpenQASM operands for gate `$gate_name` must have matching register sizes",
-        ),
-    )
-
-    ops = GateOp[]
-    for i = 1:broadcast_length
-        qubits = Tuple(qs[length(qs) == 1 ? 1 : i] for qs in operand_qubits)
-        push!(ops, GateOp(gate, qubits))
-    end
-    return ops
+function _qasm_instruction_controls(instruction)
+    return Pair{Int,Int}[control.first => control.second for control in instruction.controls]
 end
 
-function _parse_qasm_qubit_ref(
-    ref::AbstractString,
-    registers::Dict{String,Vector{Int}},
-    constants::Dict{String,Float64},
-)
-    m = match(QASM_QUBIT_REF_RE, ref)
-    m === nothing && throw(ArgumentError("Invalid OpenQASM qubit operand `$ref`"))
-
-    name, index_text = m.captures
-    haskey(registers, name) ||
-        throw(ArgumentError("OpenQASM qubit register `$name` has not been declared"))
-
-    qubits = registers[name]
-    if index_text === nothing
-        return qubits
-    end
-
-    occursin(":", index_text) && throw(
-        ArgumentError(
-            "OpenQASM register slices are not supported; use whole-register broadcasting or scalar indices",
-        ),
-    )
-    qasm_index = _eval_qasm_integer_expr(index_text, constants)
-    0 <= qasm_index < length(qubits) || throw(
-        ArgumentError(
-            "OpenQASM qubit `$name[$qasm_index]` is out of range for register of size $(length(qubits))",
-        ),
-    )
-    return [qubits[qasm_index+1]]
+function _qasm_base_qubits(instruction, controls::Vector{Pair{Int,Int}})
+    control_qubits = first.(controls)
+    return [q for q in Int.(instruction.targets) if q ∉ control_qubits]
 end
 
-function _split_qasm_operands(text::AbstractString)
-    stripped = strip(text)
-    isempty(stripped) && return String[]
-    return String.(strip.(_split_qasm_comma_list(stripped)))
+function _qasm_can_use_fixed_gate_symbol(instruction, fixed_gate, controls::Vector{Pair{Int,Int}})
+    return fixed_gate !== nothing &&
+           isempty(instruction.arguments) &&
+           isempty(controls) &&
+           isapprox(instruction.exponent, 1.0; atol = 1e-12)
 end
 
-function _split_qasm_parameters(text::AbstractString)
-    stripped = strip(text)
-    isempty(stripped) && return String[]
-    return String.(strip.(_split_qasm_comma_list(stripped)))
+function _qasm_local_positions(qubits::Vector{Int}, op_qubits::Vector{Int})
+    return [_qasm_local_position(q, op_qubits) for q in qubits]
 end
 
-function _split_qasm_comma_list(text::AbstractString)
-    parts = String[]
-    depth = 0
-    start = firstindex(text)
-    i = firstindex(text)
-    while i <= lastindex(text)
-        c = text[i]
-        if c == '(' || c == '[' || c == '{'
-            depth += 1
-        elseif c == ')' || c == ']' || c == '}'
-            depth -= 1
-        elseif c == ',' && depth == 0
-            push!(parts, String(text[start:prevind(text, i)]))
-            start = nextind(text, i)
-        end
-        i = nextind(text, i)
-    end
-    push!(parts, String(text[start:lastindex(text)]))
-    return parts
-end
-
-function _resolve_qasm_parameterized_gate(
-    gate_name::AbstractString,
-    parameter_text::AbstractString,
-    constants::Dict{String,Float64},
-    n_qubits::Int,
-)
-    gate_key = _qasm_gate_key(gate_name)
-    expected_qubit_count = get(QASM_PARAMETERIZED_GATE_QUBIT_COUNTS, gate_key, nothing)
-    expected_qubit_count === nothing &&
-        throw(ArgumentError("Unsupported OpenQASM gate `$gate_name`"))
-
-    parameters = [
-        Float64(_eval_qasm_numeric_expr(parameter, constants)) for
-        parameter in _split_qasm_parameters(parameter_text)
+function _qasm_local_controls(controls::Vector{Pair{Int,Int}}, op_qubits::Vector{Int})
+    return [
+        _qasm_local_position(control.first, op_qubits) => control.second for control in controls
     ]
-    matrix = _qasm_parameterized_gate_matrix(gate_key, parameters, n_qubits)
-    gate = _register_qasm_generated_gate(gate_key, parameters, matrix)
-    return gate_key, gate, expected_qubit_count
 end
 
-function _register_qasm_generated_gate(
-    gate_name::AbstractString,
-    parameters::Vector{Float64},
-    matrix::AbstractMatrix,
+function _qasm_generated_gate_signature(
+    instruction,
+    controls::Vector{Pair{Int,Int}},
+    op_qubits::Vector{Int},
 )
-    key = Symbol(
-        "QASM_",
-        uppercase(gate_name),
-        "_",
-        hash((gate_name, round.(parameters; digits = 14), size(matrix))),
+    return (
+        arguments = _qasm_signature_arguments(instruction),
+        controls = sort(collect(controls); by = first),
+        exponent = round(Float64(instruction.exponent); digits = 14),
+        qubits = op_qubits,
     )
+end
+
+function _qasm_signature_arguments(instruction)
+    return round.(Float64.([arg for arg in instruction.arguments if arg isa Real]); digits = 14)
+end
+
+function _qasm_instruction_matrix(instruction, base_qubit_count::Int)
+    fixed_gate = get(QASM_FIXED_GATE_ALIASES, instruction.type, nothing)
+    if fixed_gate !== nothing
+        _qasm_check_qubit_count(
+            instruction.type,
+            base_qubit_count,
+            QASM_FIXED_GATE_QUBIT_COUNTS[fixed_gate],
+        )
+        isempty(instruction.arguments) ||
+            throw(ArgumentError("OpenQASM gate `$(instruction.type)` does not accept parameters"))
+        return String(instruction.type), resolve_gate(fixed_gate)
+    end
+
+    gate_name = _qasm_gate_key(instruction.type)
+    haskey(QASM_PARAMETERIZED_GATE_QUBIT_COUNTS, gate_name) ||
+        throw(ArgumentError("Unsupported OpenQASM gate `$(instruction.type)`"))
+
+    if gate_name != "gphase"
+        expected = QASM_PARAMETERIZED_GATE_QUBIT_COUNTS[gate_name]
+        _qasm_check_qubit_count(instruction.type, base_qubit_count, expected)
+    end
+
+    parameters = _qasm_instruction_parameters(instruction)
+    matrix = _qasm_parameterized_gate_matrix(gate_name, parameters, max(base_qubit_count, 1))
+    return gate_name, matrix
+end
+
+function _qasm_instruction_parameters(instruction)
+    parameters = Float64[]
+    for argument in instruction.arguments
+        argument isa Real || throw(
+            ArgumentError(
+                "OpenQASM gate `$(instruction.type)` has non-numeric parameter `$argument`",
+            ),
+        )
+        push!(parameters, Float64(argument))
+    end
+    return parameters
+end
+
+function _qasm_check_qubit_count(gate_name::AbstractString, actual::Int, expected::Int)
+    actual == expected || throw(
+        ArgumentError("OpenQASM gate `$gate_name` expects $expected qubit operand(s), got $actual"),
+    )
+end
+
+function _qasm_local_position(qubit::Int, op_qubits::Vector{Int})
+    position = findfirst(==(qubit), op_qubits)
+    position === nothing && throw(ArgumentError("Internal OpenQASM lowering error"))
+    return position
+end
+
+function _qasm_apply_exponent(matrix::AbstractMatrix, exponent::Real, gate_name::AbstractString)
+    isapprox(exponent, 1.0; atol = 1e-12) && return Matrix{ComplexF64}(matrix)
+    isapprox(exponent, round(exponent); atol = 1e-12) || throw(
+        ArgumentError(
+            "OpenQASM gate modifiers with non-integer exponent `$exponent` are not supported for `$gate_name`",
+        ),
+    )
+    return Matrix{ComplexF64}(matrix) ^ Int(round(exponent))
+end
+
+function _qasm_apply_controls(
+    matrix::AbstractMatrix,
+    target_positions::Vector{Int},
+    n_qubits::Int,
+    control_positions::Vector{Pair{Int,Int}},
+)
+    isempty(target_positions) &&
+        throw(ArgumentError("Controlled OpenQASM gates require at least one target qubit"))
+    all(control -> control.second in (0, 1), control_positions) ||
+        throw(ArgumentError("OpenQASM controls must target classical bit values 0 or 1"))
+
+    D = 2^n_qubits
+    controlled = zeros(ComplexF64, D, D)
+    for col = 0:(D-1)
+        # Each matrix column is one input computational-basis state.
+        bits = _qasm_basis_bits(col, n_qubits)
+        if all(bits[control.first] == control.second for control in control_positions)
+            # Controls matched, so project the full basis state onto the target
+            # qubits and look up how the unmodified gate transforms them.
+            gate_bits = [bits[position] for position in target_positions]
+            gate_index = _qasm_bits_to_index(gate_bits)
+            for out_gate_index = 0:(2^length(target_positions)-1)
+                amplitude = matrix[out_gate_index+1, gate_index+1]
+                iszero(amplitude) && continue
+                # Reinsert the transformed target bits into the full basis
+                # state while leaving controls and untouched qubits fixed.
+                out_bits = copy(bits)
+                out_gate_bits = _qasm_basis_bits(out_gate_index, length(target_positions))
+                for (k, position) in enumerate(target_positions)
+                    out_bits[position] = out_gate_bits[k]
+                end
+                out_col = _qasm_bits_to_index(out_bits)
+                controlled[out_col+1, col+1] += amplitude
+            end
+        else
+            # Controls did not match, so this basis state passes through unchanged.
+            controlled[col+1, col+1] = 1
+        end
+    end
+    return controlled
+end
+
+_qasm_basis_bits(index::Int, n_bits::Int) = reverse(digits(index; base = 2, pad = n_bits))
+
+function _qasm_bits_to_index(bits::AbstractVector{<:Integer})
+    n_bits = length(bits)
+    return sum(bits[k] * 2^(n_bits - k) for k = 1:n_bits)
+end
+
+function _register_qasm_generated_gate(gate_name::AbstractString, signature, matrix::AbstractMatrix)
+    # Generated gates cover parameterized gates, custom definitions, and gate
+    # modifiers. The signature keeps distinct matrices from sharing a symbol.
+    key = Symbol("QASM_", uppercase(gate_name), "_", hash((gate_name, signature, size(matrix))))
     EXTRA_GATES[key] = Matrix{ComplexF64}(matrix)
     return key
 end
@@ -528,35 +555,35 @@ end
 
 _qasm_matrix(entries::AbstractMatrix) = Matrix{ComplexF64}(entries)
 
-function _qasm_phase(lambda)
+function _qasm_phase_matrix(lambda)
     return _qasm_matrix([
         1 0
         0 exp(im * lambda)
     ])
 end
 
-function _qasm_rx(theta)
+function _qasm_rx_matrix(theta)
     return _qasm_matrix([
         cos(theta / 2) -im * sin(theta / 2)
         -im * sin(theta / 2) cos(theta / 2)
     ])
 end
 
-function _qasm_ry(theta)
+function _qasm_ry_matrix(theta)
     return _qasm_matrix([
         cos(theta / 2) -sin(theta / 2)
         sin(theta / 2) cos(theta / 2)
     ])
 end
 
-function _qasm_rz(theta)
+function _qasm_rz_matrix(theta)
     return _qasm_matrix([
         exp(-im * theta / 2) 0
         0 exp(im * theta / 2)
     ])
 end
 
-function _qasm_U(theta, phi, lambda)
+function _qasm_builtin_u_matrix(theta, phi, lambda)
     theta_phase = exp(im * theta)
     one_plus_theta_phase = 1 + theta_phase
     one_minus_theta_phase = 1 - theta_phase
@@ -571,25 +598,26 @@ function _qasm_U(theta, phi, lambda)
     ])
 end
 
-function _qasm_u3(theta, phi, lambda)
-    return exp(-im * (theta + phi + lambda) / 2) * _qasm_U(theta, phi, lambda)
+function _qasm_u3_matrix(theta, phi, lambda)
+    return exp(-im * (theta + phi + lambda) / 2) * _qasm_builtin_u_matrix(theta, phi, lambda)
 end
 
-function _qasm_one_parameter_gate(builder)
-    return (parameters, _) -> builder(parameters[1])
+function _qasm_one_parameter_gate(matrix_builder)
+    return (parameters, _n_qubits) -> matrix_builder(parameters[1])
 end
 
-function _qasm_controlled_one_parameter_gate(builder)
-    return (parameters, _) -> _qasm_controlled(builder(parameters[1]))
+function _qasm_controlled_one_parameter_gate(matrix_builder)
+    return (parameters, _n_qubits) -> _qasm_controlled(matrix_builder(parameters[1]))
 end
 
-function _qasm_u2(parameters, _)
-    return _qasm_u3(π / 2, parameters[1], parameters[2])
+function _qasm_u2_gate(parameters, _n_qubits)
+    return _qasm_u3_matrix(π / 2, parameters[1], parameters[2])
 end
 
-function _qasm_controlled_u(parameters, _)
+function _qasm_controlled_u_gate(parameters, _n_qubits)
     return _qasm_controlled(
-        exp(im * parameters[4]) * _qasm_U(parameters[1], parameters[2], parameters[3]),
+        exp(im * parameters[4]) *
+        _qasm_builtin_u_matrix(parameters[1], parameters[2], parameters[3]),
     )
 end
 
@@ -597,31 +625,33 @@ function _qasm_global_phase_gate(parameters, n_qubits)
     return _qasm_global_phase(parameters[1], n_qubits)
 end
 
-function _qasm_u_gate(parameters, _)
-    return _qasm_U(parameters[1], parameters[2], parameters[3])
+function _qasm_u_gate(parameters, _n_qubits)
+    return _qasm_builtin_u_matrix(parameters[1], parameters[2], parameters[3])
 end
 
-function _qasm_u3_gate(parameters, _)
-    return _qasm_u3(parameters[1], parameters[2], parameters[3])
+function _qasm_u3_gate(parameters, _n_qubits)
+    return _qasm_u3_matrix(parameters[1], parameters[2], parameters[3])
 end
 
 const QASM_PARAMETERIZED_GATE_BUILDERS = Dict{String,Function}(
-    "p" => _qasm_one_parameter_gate(_qasm_phase),
-    "phase" => _qasm_one_parameter_gate(_qasm_phase),
-    "rx" => _qasm_one_parameter_gate(_qasm_rx),
-    "ry" => _qasm_one_parameter_gate(_qasm_ry),
-    "rz" => _qasm_one_parameter_gate(_qasm_rz),
-    "u1" => _qasm_one_parameter_gate(_qasm_phase),
-    "u2" => _qasm_u2,
+    # Builder functions receive already-evaluated numeric parameters and the
+    # qubit count used by global-phase matrices.
+    "p" => _qasm_one_parameter_gate(_qasm_phase_matrix),
+    "phase" => _qasm_one_parameter_gate(_qasm_phase_matrix),
+    "rx" => _qasm_one_parameter_gate(_qasm_rx_matrix),
+    "ry" => _qasm_one_parameter_gate(_qasm_ry_matrix),
+    "rz" => _qasm_one_parameter_gate(_qasm_rz_matrix),
+    "u1" => _qasm_one_parameter_gate(_qasm_phase_matrix),
+    "u2" => _qasm_u2_gate,
     "u3" => _qasm_u3_gate,
     "u" => _qasm_u_gate,
     "gphase" => _qasm_global_phase_gate,
-    "cp" => _qasm_controlled_one_parameter_gate(_qasm_phase),
-    "cphase" => _qasm_controlled_one_parameter_gate(_qasm_phase),
-    "crx" => _qasm_controlled_one_parameter_gate(_qasm_rx),
-    "cry" => _qasm_controlled_one_parameter_gate(_qasm_ry),
-    "crz" => _qasm_controlled_one_parameter_gate(_qasm_rz),
-    "cu" => _qasm_controlled_u,
+    "cp" => _qasm_controlled_one_parameter_gate(_qasm_phase_matrix),
+    "cphase" => _qasm_controlled_one_parameter_gate(_qasm_phase_matrix),
+    "crx" => _qasm_controlled_one_parameter_gate(_qasm_rx_matrix),
+    "cry" => _qasm_controlled_one_parameter_gate(_qasm_ry_matrix),
+    "crz" => _qasm_controlled_one_parameter_gate(_qasm_rz_matrix),
+    "cu" => _qasm_controlled_u_gate,
 )
 
 function _qasm_parameterized_gate_matrix(
@@ -641,196 +671,15 @@ end
 
 function _qasm_controlled(gate::AbstractMatrix)
     n = size(gate, 1)
-    U = Matrix{ComplexF64}(I, 2n, 2n)
-    U[(n+1):(2n), (n+1):(2n)] .= gate
-    return U
+    controlled = Matrix{ComplexF64}(I, 2n, 2n)
+    controlled[(n+1):(2n), (n+1):(2n)] .= gate
+    return controlled
 end
 
 function _qasm_global_phase(gamma, n_qubits::Int)
     n_qubits > 0 || throw(ArgumentError("`gphase` requires declared qubits"))
     return exp(im * gamma) * Matrix{ComplexF64}(I, 2^n_qubits, 2^n_qubits)
 end
-
-function _eval_qasm_integer_expr(text::AbstractString, constants::Dict{String,Float64})
-    value = _eval_qasm_numeric_expr(text, constants)
-    isapprox(value, round(value); atol = 1e-12) ||
-        throw(ArgumentError("OpenQASM expression `$text` must evaluate to an integer"))
-    return Int(round(value))
-end
-
-mutable struct _QASMExprParser
-    text::String
-    index::Int
-    constants::Dict{String,Float64}
-end
-
-function _eval_qasm_numeric_expr(text::AbstractString, constants::Dict{String,Float64})
-    parser = _QASMExprParser(String(text), 1, constants)
-    value = _parse_qasm_expr_sum(parser)
-    _skip_qasm_expr_space!(parser)
-    parser.index > lastindex(parser.text) || throw(
-        ArgumentError(
-            "Unsupported OpenQASM expression syntax near `$(parser.text[parser.index:end])`",
-        ),
-    )
-    return value
-end
-
-function _parse_qasm_expr_sum(parser::_QASMExprParser)
-    value = _parse_qasm_expr_product(parser)
-    while true
-        _skip_qasm_expr_space!(parser)
-        _qasm_expr_at_end(parser) && return value
-        op = parser.text[parser.index]
-        op == '+' || op == '-' || return value
-        parser.index = nextind(parser.text, parser.index)
-        rhs = _parse_qasm_expr_product(parser)
-        value = op == '+' ? value + rhs : value - rhs
-    end
-end
-
-function _parse_qasm_expr_product(parser::_QASMExprParser)
-    value = _parse_qasm_expr_power(parser)
-    while true
-        _skip_qasm_expr_space!(parser)
-        _qasm_expr_at_end(parser) && return value
-        op = parser.text[parser.index]
-        op == '*' || op == '/' || return value
-        if op == '*' &&
-           nextind(parser.text, parser.index) <= lastindex(parser.text) &&
-           parser.text[nextind(parser.text, parser.index)] == '*'
-            return value
-        end
-        parser.index = nextind(parser.text, parser.index)
-        rhs = _parse_qasm_expr_power(parser)
-        value = op == '*' ? value * rhs : value / rhs
-    end
-end
-
-function _parse_qasm_expr_power(parser::_QASMExprParser)
-    value = _parse_qasm_expr_unary(parser)
-    _skip_qasm_expr_space!(parser)
-    if !_qasm_expr_at_end(parser) && parser.text[parser.index] == '^'
-        parser.index = nextind(parser.text, parser.index)
-        value = value ^ _parse_qasm_expr_power(parser)
-    elseif !_qasm_expr_at_end(parser) && parser.text[parser.index] == '*'
-        next = nextind(parser.text, parser.index)
-        if next <= lastindex(parser.text) && parser.text[next] == '*'
-            parser.index = nextind(parser.text, next)
-            value = value ^ _parse_qasm_expr_power(parser)
-        end
-    end
-    return value
-end
-
-function _parse_qasm_expr_unary(parser::_QASMExprParser)
-    _skip_qasm_expr_space!(parser)
-    _qasm_expr_at_end(parser) && throw(ArgumentError("Unexpected end of OpenQASM expression"))
-    op = parser.text[parser.index]
-    if op == '+'
-        parser.index = nextind(parser.text, parser.index)
-        return _parse_qasm_expr_unary(parser)
-    elseif op == '-'
-        parser.index = nextind(parser.text, parser.index)
-        return -_parse_qasm_expr_unary(parser)
-    end
-    return _parse_qasm_expr_primary(parser)
-end
-
-function _parse_qasm_expr_primary(parser::_QASMExprParser)
-    _skip_qasm_expr_space!(parser)
-    _qasm_expr_at_end(parser) && throw(ArgumentError("Unexpected end of OpenQASM expression"))
-
-    if parser.text[parser.index] == '('
-        parser.index = nextind(parser.text, parser.index)
-        value = _parse_qasm_expr_sum(parser)
-        _skip_qasm_expr_space!(parser)
-        (!_qasm_expr_at_end(parser) && parser.text[parser.index] == ')') ||
-            throw(ArgumentError("Missing `)` in OpenQASM expression"))
-        parser.index = nextind(parser.text, parser.index)
-        return value
-    end
-
-    if isdigit(parser.text[parser.index]) || parser.text[parser.index] == '.'
-        return _parse_qasm_expr_number(parser)
-    end
-
-    name = _parse_qasm_expr_identifier(parser)
-    lowered = lowercase(name)
-    if lowered in ("pi", "π")
-        return π
-    elseif lowered == "tau"
-        return 2π
-    elseif lowered == "e"
-        return ℯ
-    elseif haskey(parser.constants, name)
-        return parser.constants[name]
-    elseif haskey(parser.constants, lowered)
-        return parser.constants[lowered]
-    end
-
-    _skip_qasm_expr_space!(parser)
-    if !_qasm_expr_at_end(parser) && parser.text[parser.index] == '('
-        parser.index = nextind(parser.text, parser.index)
-        arg = _parse_qasm_expr_sum(parser)
-        _skip_qasm_expr_space!(parser)
-        (!_qasm_expr_at_end(parser) && parser.text[parser.index] == ')') ||
-            throw(ArgumentError("Missing `)` in OpenQASM function call `$name`"))
-        parser.index = nextind(parser.text, parser.index)
-        return _eval_qasm_numeric_function(lowered, arg)
-    end
-
-    throw(ArgumentError("Unknown OpenQASM numeric identifier `$name`"))
-end
-
-function _parse_qasm_expr_number(parser::_QASMExprParser)
-    start = parser.index
-    seen_exponent = false
-    while parser.index <= lastindex(parser.text)
-        c = parser.text[parser.index]
-        if isdigit(c) || c == '.'
-            parser.index = nextind(parser.text, parser.index)
-        elseif (c == 'e' || c == 'E') && !seen_exponent
-            seen_exponent = true
-            parser.index = nextind(parser.text, parser.index)
-            if parser.index <= lastindex(parser.text) &&
-               (parser.text[parser.index] == '+' || parser.text[parser.index] == '-')
-                parser.index = nextind(parser.text, parser.index)
-            end
-        else
-            break
-        end
-    end
-    return parse(Float64, parser.text[start:prevind(parser.text, parser.index)])
-end
-
-function _parse_qasm_expr_identifier(parser::_QASMExprParser)
-    start = parser.index
-    while parser.index <= lastindex(parser.text)
-        c = parser.text[parser.index]
-        if isletter(c) || isdigit(c) || c == '_' || c == 'π'
-            parser.index = nextind(parser.text, parser.index)
-        else
-            break
-        end
-    end
-    start == parser.index && throw(ArgumentError("Expected OpenQASM numeric expression"))
-    return parser.text[start:prevind(parser.text, parser.index)]
-end
-
-function _eval_qasm_numeric_function(name::AbstractString, arg::Float64)
-    f = get(QASM_NUMERIC_FUNCTIONS, String(name), nothing)
-    f === nothing && throw(ArgumentError("Unsupported OpenQASM numeric function `$name`"))
-    return Float64(f(arg))
-end
-
-function _skip_qasm_expr_space!(parser::_QASMExprParser)
-    while parser.index <= lastindex(parser.text) && isspace(parser.text[parser.index])
-        parser.index = nextind(parser.text, parser.index)
-    end
-end
-
-_qasm_expr_at_end(parser::_QASMExprParser) = parser.index > lastindex(parser.text)
 
 # ============================================================================ #
 # TestItems
@@ -955,7 +804,7 @@ end
     qasm = """
     OPENQASM 3;
     include "stdgates.inc";
-    const int n = ceiling(1.2);
+    const int n = int(ceiling(1.2));
     const angle theta = 2 * arctan(1);
     const angle phi = log(exp(pi / 4));
     qubit[n] q;
@@ -999,17 +848,62 @@ end
     @test [(op.gate, op.qubits) for op in c.ops] == [(:H, (1,)), (:H, (2,)), (:CX, (1, 3)), (:CX, (2, 4))]
 end
 
+@testitem "from_qasm — supports static Quasar-expanded OpenQASM structure" tags = [:qasm] begin
+    using LinearAlgebra
+
+    qasm = """
+    OPENQASM 3;
+    qubit[2] q;
+
+    gate x_alias a {
+        x a;
+    }
+
+    gate custom_cx c, t {
+        ctrl @ x_alias c, t;
+    }
+
+    for int i in [0:1] {
+        h q[i];
+    }
+
+    z q[0:1];
+    inv @ s q[0];
+    custom_cx q[0], q[1];
+    """
+
+    c = from_qasm(qasm)
+    @test c.n_qubits == 2
+    @test [(op.gate, op.qubits) for op in c.ops[1:4]] == [(:H, (1,)), (:H, (2,)), (:Z, (1,)), (:Z, (2,))]
+    @test c.ops[5].qubits == (1,)
+    @test startswith(String(c.ops[5].gate), "QASM_S_")
+    @test c.ops[6].qubits == (1, 2)
+    @test startswith(String(c.ops[6].gate), "QASM_X_")
+
+    generated_sdg = GateCircuit([c.ops[5]], 1)
+    expected_sdg = GateCircuit([GateOp(:SDG, (1,))], 1)
+    @test circuit_unitary(generated_sdg) ≈ circuit_unitary(expected_sdg) atol = 1e-12
+
+    generated_cx = GateCircuit([c.ops[6]], 2)
+    expected_cx = GateCircuit([GateOp(:CX, (1, 2))], 2)
+    @test circuit_unitary(generated_cx) ≈ circuit_unitary(expected_cx) atol = 1e-12
+
+    U = circuit_unitary(c)
+    @test U' * U ≈ I(4) atol = 1e-12
+end
+
 @testitem "from_qasm — rejects unsupported OpenQASM statements clearly" tags = [:qasm] begin
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; ctrl @ x q[0], q[0];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; measure q[0] -> c[0];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; reset q[0];")
-    @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; gate custom a { x a; }")
-    @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; for int i in [0:1] { x q[0]; }")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; delay[10ns] q[0];")
+    @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; box { h q[0]; }")
+    @test_throws ArgumentError from_qasm("OPENQASM 3; defcalgrammar \"openpulse\"; qubit[1] q;")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; h q[1];")
+    @test_throws ArgumentError from_qasm("OPENQASM 2.0; qreg q[1]; h q[0];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; include \"custom.inc\"; qubit[1] q; h q[0];")
-    @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[2] q; h q[0:1];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; gphase(pi) q[0];")
+    @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; pow(0.5) @ x q[0];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; rx(atan(1)) q[0];")
     @test_throws ArgumentError from_qasm("OPENQASM 3; qubit[1] q; rz(ln(1)) q[0];")
 end
