@@ -3,3 +3,6 @@ scripts/logs/
 *.jl.cov
 .DS_Store
 Manifest.toml
+docs/src/index.md
+docs/build/
+.venv-qiskit/

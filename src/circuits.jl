@@ -36,10 +36,31 @@ const GATE_ALIASES = Dict{Symbol,Symbol}(:CNOT => :CX)
 
 # Standard rotation gates not in Piccolo's GATES
 const EXTRA_GATES = Dict{Symbol,Matrix{ComplexF64}}(
+    :ID => Matrix{ComplexF64}(I, 2, 2),
     :S => ComplexF64[1 0; 0 im],
+    :SDG => ComplexF64[1 0; 0 -im],
     :SX => 0.5 .* ComplexF64[1+im 1-im; 1-im 1+im],   # √X (HeronR3 native)
     :T => ComplexF64[1 0; 0 exp(im*π/4)],
+    :TDG => ComplexF64[1 0; 0 exp(-im*π/4)],
     :Rz => ComplexF64[1 0; 0 1],  # placeholder, overridden by Rz(θ)
+    :CY => ComplexF64[
+        1 0 0 0;
+        0 1 0 0;
+        0 0 0 -im;
+        0 0 im 0
+    ],
+    :CH => ComplexF64[
+        1 0 0 0;
+        0 1 0 0;
+        0 0 1/√2 1/√2;
+        0 0 1/√2 -1/√2
+    ],
+    :SWAP => ComplexF64[
+        1 0 0 0;
+        0 0 1 0;
+        0 1 0 0;
+        0 0 0 1
+    ],
     # Doubly-controlled gates on qubits (1,2,3), qubit 1 MSB.
     # CCX (Toffoli): flip qubit 3 iff qubits 1,2 both |1⟩ → swaps |110⟩↔|111⟩.
     :CCX => begin
@@ -52,6 +73,14 @@ const EXTRA_GATES = Dict{Symbol,Matrix{ComplexF64}}(
     end,
     # CCZ: phase-flip |111⟩.
     :CCZ => Diagonal(ComplexF64[1, 1, 1, 1, 1, 1, 1, -1]) |> Matrix,
+    :CSWAP => begin
+        U = Matrix{ComplexF64}(I, 8, 8)
+        U[6, 6] = 0
+        U[7, 7] = 0
+        U[6, 7] = 1
+        U[7, 6] = 1
+        U
+    end,
 )
 
 """Resolve a gate symbol to its unitary matrix."""
@@ -90,10 +119,8 @@ function kron_embed(gate::AbstractMatrix, qubits::Tuple{Vararg{Int}}, n_qubits::
     # Single-qubit: direct kron
     if n_gate == 1
         q = qubits[1]
-        factors = [
-            i == q ? Matrix{ComplexF64}(gate) : Matrix{ComplexF64}(I, d, d) for
-            i = 1:n_qubits
-        ]
+        factors =
+            [i == q ? Matrix{ComplexF64}(gate) : Matrix{ComplexF64}(I, d, d) for i = 1:n_qubits]
         return reduce(kron, factors)
     end
 

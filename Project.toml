@@ -12,6 +12,7 @@ TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
 TestItems = "1c621080-faea-4a02-84b6-bbd5e436b8fe"
 
 [compat]
+JuliaFormatter = "2.5"
 LinearAlgebra = "1.10, 1.11, 1.12"
 Piccolo = "1.6"
 Printf = "1.10, 1.11, 1.12"
@@ -21,6 +22,7 @@ TestItems = "1.0"
 julia = "1.10, 1.11, 1.12"
 
 [extras]
+JuliaFormatter = "98e50ef6-434e-11e9-1051-2b60c6c9e899"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]

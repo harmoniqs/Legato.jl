@@ -140,6 +140,7 @@ set_default_solver_strategy!(f) = (_DEFAULT_SOLVER_STRATEGY[] = f)
 include("devices.jl")
 include("profiles.jl")
 include("circuits.jl")
+include("qasm.jl")
 include("transpile.jl")
 include("partitioning.jl")
 include("library.jl")
@@ -152,7 +153,7 @@ include("report.jl")
 
 export AbstractDevice, TransmonDevice, TransmonQubit, CouplingEdge
 export HeronR3
-export AbstractCircuit, GateOp, GateCircuit, circuit_unitary
+export AbstractCircuit, GateOp, GateCircuit, circuit_unitary, from_qasm
 export to_native, native_gate_set
 export qft_circuit, bell_circuit, toffoli_circuit, ccz_circuit
 export compile, compile_block

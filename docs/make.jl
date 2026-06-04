@@ -1,3 +1,8 @@
+using Pkg
+
+Pkg.develop(PackageSpec(path = dirname(@__DIR__)))
+Pkg.instantiate()
+
 using Stretto
 using PiccoloDocsTemplate
 
