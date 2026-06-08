@@ -111,6 +111,29 @@ end
     @test length(device.qubits) >= 4
 end
 
+@testitem "HeronR2 construction" begin
+    device = HeronR2()
+    @test device isa TransmonDevice
+    @test device.name == "ibm_heron_r2"
+    @test length(device.qubits) == 8
+    @test haskey(device.native_gates, :CZ)
+end
+
+@testitem "HeronR2 compiles a 2-qubit block" begin
+    using Stretto
+    device = HeronR2(n_levels = 2)
+    result = compile_block(
+        qft_circuit(2),
+        device,
+        [1, 2];
+        max_iter = 2,
+        T_ns = 20.0,
+        N_knots = 5,
+    )
+    @test result isa Stretto.BlockResult
+    @test 0.0 <= result.fidelity <= 1.0
+end
+
 @testitem "MultiTransmonSystem from 2-qubit subset" begin
     using Piccolo: CompositeQuantumSystem, MultiTransmonSystem
     device = HeronR3()
