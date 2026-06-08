@@ -14,7 +14,7 @@ Pages = ["devices.jl", "profiles.jl"]
 ```@autodocs
 Modules = [Stretto]
 Order = [:type, :function]
-Pages = ["circuits.jl", "library.jl"]
+Pages = ["circuits.jl", "qasm.jl", "library.jl"]
 ```
 
 ## Compilation
