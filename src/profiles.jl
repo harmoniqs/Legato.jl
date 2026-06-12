@@ -53,3 +53,57 @@ function HeronR3(; n_levels::Int = 3)
 
     return TransmonDevice("ibm_heron_r3", qubits, edges, native_gates, 0.05, T1, T2)
 end
+
+"""
+    HeronR2(; n_levels::Int = 3)
+
+IBM Heron r2 device profile for the ibm_fez, ibm_kingston, and
+ibm_marrakesh processor family.
+
+Heavy-hex topology, CZ-native, 156 qubits. This profile follows `HeronR3`
+by modeling an 8-qubit linear subset for fast Stretto benchmarks. Published
+processor-level values are used for CZ, T1, and T2. Qubit frequencies,
+anharmonicities, and coupling strengths are representative values following
+the existing profile convention, not machine-specific daily calibration data.
+
+# Keyword Arguments
+- `n_levels::Int = 3`: number of levels per transmon.
+"""
+function HeronR2(; n_levels::Int = 3)
+    # Representative Heron r2 transmon parameters. Frequencies are staggered
+    # to avoid collisions in the reduced 8-qubit benchmark subset.
+    qubits = [
+        TransmonQubit(4.95, 0.31, n_levels),
+        TransmonQubit(4.82, 0.31, n_levels),
+        TransmonQubit(5.02, 0.31, n_levels),
+        TransmonQubit(4.88, 0.31, n_levels),
+        TransmonQubit(5.08, 0.31, n_levels),
+        TransmonQubit(4.78, 0.31, n_levels),
+        TransmonQubit(5.00, 0.31, n_levels),
+        TransmonQubit(4.90, 0.31, n_levels),
+    ]
+
+    # Heavy-hex nearest-neighbor coupling represented as the same 8-qubit
+    # linear benchmark subset used by HeronR3.
+    edges = [
+        CouplingEdge(1, 2, 0.003),
+        CouplingEdge(2, 3, 0.003),
+        CouplingEdge(3, 4, 0.003),
+        CouplingEdge(4, 5, 0.003),
+        CouplingEdge(5, 6, 0.003),
+        CouplingEdge(6, 7, 0.003),
+        CouplingEdge(7, 8, 0.003),
+    ]
+
+    native_gates = Dict{Symbol,GateSpec}(
+        :CZ => GateSpec(68.0, 0.002848),  # published Heron r2 median
+        :X => GateSpec(36.0, 0.000324),   # representative single-qubit estimate
+        :SX => GateSpec(36.0, 0.000324),  # representative single-qubit estimate
+        :H => GateSpec(36.0, 0.0005),     # synthesized via SX/RZ for native rewrites
+    )
+
+    T1 = fill(218.0, 8)  # us, published Heron r2 median
+    T2 = fill(264.0, 8)  # us, published Heron r2 median
+
+    return TransmonDevice("ibm_heron_r2", qubits, edges, native_gates, 0.05, T1, T2)
+end
