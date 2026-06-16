@@ -1,0 +1,133 @@
+# IQM Emerald — Crystal 54 calibration snapshot 2026-06-09
+# Source: IRB calibration data + arXiv:2603.11018 for frequencies/couplings.
+# QB46 is non-functional (PRX error 11.4%, T2 not measured → nan).
+
+drive_max = 0.100   # max drive amplitude (GHz)
+
+# --- Per-qubit calibration, QB1–QB54 ---
+t1 = [
+    46.38, 24.86, 42.43, 39.81, 37.55, 56.48, 65.96, 36.95, 47.19, 50.40,
+    20.90, 61.21, 32.32, 45.29, 32.28, 55.68, 46.80, 57.14, 54.09, 66.07,
+    50.46, 56.03, 60.35, 62.12, 46.28, 49.41, 49.04, 50.03, 48.01, 58.10,
+    48.86, 33.60, 50.00, 64.51, 39.03, 55.71, 54.80, 64.66, 64.11, 51.17,
+    45.58, 37.87, 40.49, 65.33, 43.49, 51.85, 19.49, 65.26, 75.42, 54.56,
+    50.86, 58.19, 55.74, 47.69,
+]  # µs
+
+# QB46 (index 46) T2 not measured — nan so arithmetic on this qubit fails loudly
+t2 = [
+    17.93, 17.97, 47.98, 12.27, 21.89, 12.99, 19.90, 33.41,  4.33, 52.12,
+    12.16, 18.06, 11.70, 14.37, 20.99,  9.03, 13.65, 17.72, 30.28, 14.28,
+     8.16, 13.16, 26.44, 17.99, 19.30,  9.20, 11.57,  8.38, 12.38, 49.45,
+    14.39, 14.87,  7.30,  9.18, 12.97,  8.44, 16.74, 10.23, 33.26, 14.96,
+     2.51, 15.31, 11.20, 32.53, 11.56,   nan, 12.73,  6.14, 16.51, 50.47,
+    27.58, 21.69, 18.18, 14.46,
+]  # µs
+
+# Per-qubit PRX error rates (54 values). Stored for future use; TransmonQubit
+# has no prx_error field yet. Distinct from native_gates.PRX.error_rate (device median).
+prx_error = [
+    3.01e-4, 3.75e-4, 3.00e-4, 5.53e-4, 7.13e-4, 2.90e-4, 5.84e-4, 9.16e-4, 4.49e-3, 3.56e-4,
+    5.51e-4, 2.06e-4, 1.09e-3, 9.24e-4, 6.02e-4, 4.29e-4, 6.57e-4, 4.29e-4, 5.40e-4, 2.20e-4,
+    3.84e-4, 3.32e-4, 2.48e-4, 9.57e-4, 2.88e-4, 6.76e-4, 3.10e-4, 2.70e-4, 3.65e-4, 8.89e-4,
+    3.56e-4, 5.30e-4, 4.65e-4, 3.49e-4, 5.73e-4, 2.92e-4, 3.05e-3, 3.51e-4, 3.05e-4, 3.59e-4,
+    3.86e-4, 9.51e-4, 3.44e-4, 1.13e-3, 3.32e-4, 1.14e-1, 5.12e-4, 2.72e-4, 1.91e-3, 2.58e-4,
+    6.58e-4, 3.57e-4, 2.10e-4, 3.40e-4,
+]
+
+# --- Topology: 83 connected pairs from Crystal 54 ---
+# g = coupling strength (GHz); all currently estimated at 5 MHz.
+# cz_error = per-edge IRB error rate. Stored for future use; CouplingEdge has no cz_error field yet.
+edges = [
+    {i = 1,  j = 2,  g = 0.005, cz_error = 3.36e-3},
+    {i = 1,  j = 5,  g = 0.005, cz_error = 4.27e-3},
+    {i = 3,  j = 4,  g = 0.005, cz_error = 1.17e-3},
+    {i = 4,  j = 5,  g = 0.005, cz_error = 6.20e-3},
+    {i = 4,  j = 10, g = 0.005, cz_error = 2.29e-3},
+    {i = 2,  j = 6,  g = 0.005, cz_error = 4.40e-3},
+    {i = 5,  j = 6,  g = 0.005, cz_error = 6.45e-3},
+    {i = 6,  j = 7,  g = 0.005, cz_error = 9.37e-3},
+    {i = 6,  j = 12, g = 0.005, cz_error = 4.57e-3},
+    {i = 3,  j = 9,  g = 0.005, cz_error = 1.25e-2},
+    {i = 8,  j = 9,  g = 0.005, cz_error = 1.71e-2},
+    {i = 9,  j = 10, g = 0.005, cz_error = 1.58e-2},
+    {i = 9,  j = 17, g = 0.005, cz_error = 1.13e-2},
+    {i = 5,  j = 11, g = 0.005, cz_error = 5.43e-3},
+    {i = 10, j = 11, g = 0.005, cz_error = 3.12e-3},
+    {i = 11, j = 12, g = 0.005, cz_error = 2.56e-3},
+    {i = 11, j = 19, g = 0.005, cz_error = 5.72e-3},
+    {i = 7,  j = 13, g = 0.005, cz_error = 3.42e-3},
+    {i = 12, j = 13, g = 0.005, cz_error = 3.48e-2},
+    {i = 13, j = 14, g = 0.005, cz_error = 1.96e-3},
+    {i = 13, j = 21, g = 0.005, cz_error = 1.68e-2},
+    {i = 8,  j = 16, g = 0.005, cz_error = 1.55e-2},
+    {i = 15, j = 16, g = 0.005, cz_error = 1.40e-2},
+    {i = 16, j = 17, g = 0.005, cz_error = 4.87e-3},
+    {i = 16, j = 24, g = 0.005, cz_error = 2.80e-3},
+    {i = 10, j = 18, g = 0.005, cz_error = 2.64e-3},
+    {i = 17, j = 18, g = 0.005, cz_error = 1.04e-2},
+    {i = 18, j = 19, g = 0.005, cz_error = 8.29e-3},
+    {i = 18, j = 26, g = 0.005, cz_error = 5.03e-3},
+    {i = 12, j = 20, g = 0.005, cz_error = 7.82e-2},
+    {i = 19, j = 20, g = 0.005, cz_error = 1.57e-2},
+    {i = 20, j = 21, g = 0.005, cz_error = 4.40e-3},
+    {i = 20, j = 28, g = 0.005, cz_error = 1.36e-2},
+    {i = 14, j = 22, g = 0.005, cz_error = 1.60e-2},
+    {i = 21, j = 22, g = 0.005, cz_error = 1.22e-2},
+    {i = 22, j = 30, g = 0.005, cz_error = 9.20e-3},
+    {i = 15, j = 23, g = 0.005, cz_error = 3.96e-2},
+    {i = 23, j = 24, g = 0.005, cz_error = 6.04e-3},
+    {i = 17, j = 25, g = 0.005, cz_error = 1.44e-2},
+    {i = 24, j = 25, g = 0.005, cz_error = 2.37e-3},
+    {i = 25, j = 26, g = 0.005, cz_error = 4.82e-3},
+    {i = 25, j = 33, g = 0.005, cz_error = 1.05e-2},
+    {i = 19, j = 27, g = 0.005, cz_error = 2.40e-2},
+    {i = 26, j = 27, g = 0.005, cz_error = 1.83e-3},
+    {i = 27, j = 28, g = 0.005, cz_error = 1.76e-2},
+    {i = 27, j = 35, g = 0.005, cz_error = 8.84e-3},
+    {i = 21, j = 29, g = 0.005, cz_error = 1.87e-3},
+    {i = 28, j = 29, g = 0.005, cz_error = 2.07e-2},
+    {i = 29, j = 30, g = 0.005, cz_error = 3.89e-3},
+    {i = 29, j = 37, g = 0.005, cz_error = 5.33e-3},
+    {i = 30, j = 31, g = 0.005, cz_error = 7.58e-3},
+    {i = 31, j = 39, g = 0.005, cz_error = 3.10e-3},
+    {i = 32, j = 33, g = 0.005, cz_error = 9.48e-3},
+    {i = 32, j = 40, g = 0.005, cz_error = 9.57e-3},
+    {i = 26, j = 34, g = 0.005, cz_error = 1.75e-3},
+    {i = 33, j = 34, g = 0.005, cz_error = 4.73e-3},
+    {i = 34, j = 35, g = 0.005, cz_error = 2.43e-3},
+    {i = 34, j = 42, g = 0.005, cz_error = 4.69e-3},
+    {i = 28, j = 36, g = 0.005, cz_error = 1.99e-2},
+    {i = 35, j = 36, g = 0.005, cz_error = 2.12e-3},
+    {i = 36, j = 37, g = 0.005, cz_error = 3.65e-3},
+    {i = 36, j = 44, g = 0.005, cz_error = 2.09e-2},
+    {i = 30, j = 38, g = 0.005, cz_error = 1.29e-2},
+    {i = 37, j = 38, g = 0.005, cz_error = 1.41e-2},
+    {i = 38, j = 39, g = 0.005, cz_error = 1.86e-2},
+    {i = 33, j = 41, g = 0.005, cz_error = 2.46e-3},
+    {i = 40, j = 41, g = 0.005, cz_error = 6.93e-3},
+    {i = 41, j = 42, g = 0.005, cz_error = 5.99e-3},
+    {i = 41, j = 47, g = 0.005, cz_error = 3.59e-3},
+    {i = 35, j = 43, g = 0.005, cz_error = 3.63e-2},
+    {i = 42, j = 43, g = 0.005, cz_error = 1.44e-2},
+    {i = 43, j = 44, g = 0.005, cz_error = 8.61e-3},
+    {i = 43, j = 49, g = 0.005, cz_error = 1.29e-2},
+    {i = 37, j = 45, g = 0.005, cz_error = 3.65e-3},
+    {i = 44, j = 45, g = 0.005, cz_error = 5.53e-3},
+    {i = 45, j = 51, g = 0.005, cz_error = 7.85e-3},
+    {i = 42, j = 48, g = 0.005, cz_error = 3.51e-3},
+    {i = 47, j = 48, g = 0.005, cz_error = 4.05e-3},
+    {i = 48, j = 49, g = 0.005, cz_error = 1.30e-2},
+    {i = 48, j = 52, g = 0.005, cz_error = 1.02e-2},
+    {i = 49, j = 53, g = 0.005, cz_error = 4.74e-3},
+    {i = 52, j = 53, g = 0.005, cz_error = 4.85e-3},
+    {i = 53, j = 54, g = 0.005, cz_error = 2.04e-3},
+]
+
+[native_gates.PRX]
+duration_ns = 20.0
+error_rate   = 4.0e-4
+
+[native_gates.CZ]
+duration_ns = 40.0
+error_rate   = 6.0e-3
