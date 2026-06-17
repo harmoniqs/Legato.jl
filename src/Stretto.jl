@@ -166,6 +166,9 @@ export PostProcessContext, default_post_process, set_default_post_process!
 export build_problem, set_build_problem!
 export CompilationStrategy
 export register_strategy!, unregister_strategy!, strategies, select_strategy
+export pulse_spectrum, plot_pulse_spectrum
+
+function plot_pulse_spectrum end
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
