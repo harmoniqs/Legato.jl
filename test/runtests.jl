@@ -55,6 +55,22 @@ end
     @test circuit_unitary(circuit) ≈ circuit_unitary(manual_circuit)
 end
 
+
+@testitem "IBM Heron R2 Device Profile Compilation" begin
+    using Stretto
+    
+    # Initialize the new R2 device profile
+    device = HeronR2()
+    
+    # Compile a standard 2-qubit QFT circuit against the linear chain
+    circuit = qft_circuit(2)
+    result = compile_block(circuit, device, [1, 2])
+    
+    # Assert successful block return and valid mathematical fidelity bounds
+    @test typeof(result).name.name == :BlockResult
+    @test 0.0 <= result.fidelity <= 1.0
+end
+
 # External-cloner / Piccolo-only CI filter: skip tests that need Piccolissimo or
 # that are slow (:integration). Full internal CI and `Pkg.test` with
 # Piccolissimo loaded should override this by passing a broader filter.

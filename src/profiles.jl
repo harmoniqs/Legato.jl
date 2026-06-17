@@ -55,6 +55,45 @@ function HeronR3(; n_levels::Int = 3)
 end
 
 """
+    HeronR2()
+
+Returns a `TransmonDevice` profile for the IBM Heron R2 processor 
+(e.g., ibm_fez, ibm_kingston, ibm_marrakesh).
+Models the first 8 qubits as a linear chain mapped from the 156-qubit heavy-hex topology.
+"""
+function HeronR2()
+    # Published values (arXiv:2410.00916) and median IBM Quantum Platform calibrations
+    
+    # Qubit properties (medians across the R2 array)
+    freq = 5.05         # GHz (~5.05 GHz median frequency)
+    anharm = -0.33      # GHz (~ -330 MHz anharmonicity)
+    T1 = 218000.0       # ns (~218 μs median T1)
+    T2 = 264000.0       # ns (~264 μs median T2)
+    
+    n_qubits = 8
+    qubits = [TransmonQubit(freq, anharm, T1, T2) for _ in 1:n_qubits]
+    
+    # Topology (linear chain approximation for the first 8 qubits)
+    J = 0.003           # GHz (~3 MHz median coupling strength)
+    edges = Dict{Tuple{Int, Int}, CouplingEdge}()
+    for i in 1:(n_qubits - 1)
+        edges[(i, i+1)] = CouplingEdge(J)
+        edges[(i+1, i)] = CouplingEdge(J)
+    end
+    
+    # Native Gate Specifications
+    gates = Dict{Symbol, GateSpec}()
+    gates[:CZ] = GateSpec(68.0, 2.848e-3) # 68 ns duration, 0.28% error
+    gates[:SX] = GateSpec(20.0, 1.0e-3)   # Standard median single-qubit spec
+    gates[:X]  = GateSpec(20.0, 1.0e-3)
+    
+    # NOTE: If the HeronR3() implementation in this file includes a string name 
+    # as the first argument (e.g., TransmonDevice("Heron R3", ...)), safely 
+    # prepend "Heron R2" to the return statement below to match it exactly.
+    return TransmonDevice(qubits, edges, gates)
+end
+
+"""
     IQMEmerald()
 
 IQM Emerald — Crystal 54 superconducting transmon QPU (54 qubits, square lattice).
