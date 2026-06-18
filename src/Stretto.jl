@@ -151,7 +151,7 @@ include("compile.jl")
 include("report.jl")
 
 export AbstractDevice, TransmonDevice, TransmonQubit, CouplingEdge
-export HeronR3, IQMEmerald
+export HeronR3, HeronR2, IQMEmerald
 export AbstractCircuit, GateOp, GateCircuit, circuit_unitary
 export to_native, native_gate_set
 export qft_circuit, bell_circuit, toffoli_circuit, ccz_circuit

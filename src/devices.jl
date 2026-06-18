@@ -111,6 +111,44 @@ end
     @test length(device.qubits) >= 4
 end
 
+@testitem "HeronR2 construction" begin
+    device = HeronR2()
+    @test device isa TransmonDevice
+    @test device.name == "ibm_heron_r2"
+    @test length(device.qubits) == 8
+    @test length(device.edges) == 7
+    @test length(device.T1) == 8
+    @test length(device.T2) == 8
+    @test all(q.n_levels == 3 for q in device.qubits)
+    @test device.T1 == fill(218.0, 8)
+    @test device.T2 == fill(264.0, 8)
+    @test device.native_gates[:CZ].duration_ns == 68.0
+    @test device.native_gates[:CZ].error_rate == 0.002848
+    @test Set(keys(device.native_gates)) == Set([:CZ, :X, :SX, :H])
+end
+
+@testitem "HeronR2 n_levels keyword" begin
+    device = HeronR2(n_levels = 2)
+    @test all(q.n_levels == 2 for q in device.qubits)
+    @test Stretto.subsystem_levels(device, [1, 2]) == [2, 2]
+end
+
+@testitem "HeronR2 compiles a 2-qubit block" tags = [:integration] begin
+    using Stretto
+    device = HeronR2(n_levels = 2)
+    result = compile_block(
+        qft_circuit(2),
+        device,
+        [1, 2];
+        max_iter = 2,
+        T_ns = 20.0,
+        N_knots = 5,
+    )
+    @test result isa Stretto.BlockResult
+    @test result.n_qubits == 2
+    @test 0.0 <= result.fidelity <= 1.0
+end
+
 @testitem "MultiTransmonSystem from 2-qubit subset" begin
     using Piccolo: CompositeQuantumSystem, MultiTransmonSystem
     device = HeronR3()
