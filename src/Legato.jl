@@ -1,4 +1,4 @@
-module Stretto
+module Legato
 
 using FFTW
 using LinearAlgebra
@@ -62,7 +62,7 @@ const _DEFAULT_INTEGRATOR = Ref{Any}((qtraj, N) -> BilinearIntegrator(qtraj, N))
 Install a new builder function for [`default_integrator`](@ref). `builder` must
 accept `(qtraj, N)` and return an `AbstractIntegrator`. Intended primarily for
 use by the private `Strettissimo` package, but callers can also use it to
-plug in custom integrators without editing Stretto source.
+plug in custom integrators without editing Legato source.
 """
 set_default_integrator!(builder) = (_DEFAULT_INTEGRATOR[] = builder; builder)
 

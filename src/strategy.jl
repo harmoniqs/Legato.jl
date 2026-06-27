@@ -106,7 +106,7 @@ is insertion-ordered as of 1.9+; first registered wins).
 function select_strategy(circuit, device)
     default = get(_STRATEGY_REGISTRY, :default, nothing)
     default === nothing &&
-        error("no :default strategy registered — Stretto module did not load correctly")
+        error("no :default strategy registered — Legato module did not load correctly")
 
     best::Union{CompilationStrategy,Nothing} = nothing
     best_score = 0.0
@@ -132,7 +132,7 @@ The `:default` strategy composes all substrate seams and matches nothing (score
 0.0 on every input). It's excluded from `select_strategy`'s scoring pool and
 used as the fallback when no strategy scores above 0.0.
 
-Byte-for-byte equivalent to Stretto v0.2.1's `compile_block` behavior.
+Byte-for-byte equivalent to Legato v0.2.1's `compile_block` behavior.
 """
 const DEFAULT_STRATEGY = CompilationStrategy(
     name = :default,
@@ -142,23 +142,23 @@ const DEFAULT_STRATEGY = CompilationStrategy(
 )
 
 @testitem "CompilationStrategy — basic construction with all fields" begin
-    using Stretto
+    using Legato
 
-    s = Stretto.CompilationStrategy(
+    s = Legato.CompilationStrategy(
         name = :test,
         description = "test strategy",
         matches = (c, d) -> 0.0,
-        integrator = (qtraj, N) -> Stretto.default_integrator(qtraj, N),
-        initial_pulse = (c, d, t, n) -> Stretto.default_initial_pulse(c, d, t, n),
-        partitioner = (c, d) -> Stretto.default_partitioner(c, d),
-        build_problem = (c, d, qt; kw...) -> Stretto.build_problem(c, d, qt; kw...),
+        integrator = (qtraj, N) -> Legato.default_integrator(qtraj, N),
+        initial_pulse = (c, d, t, n) -> Legato.default_initial_pulse(c, d, t, n),
+        partitioner = (c, d) -> Legato.default_partitioner(c, d),
+        build_problem = (c, d, qt; kw...) -> Legato.build_problem(c, d, qt; kw...),
         solver_strategy = (p, qt; kw...) ->
-            Stretto.default_solver_strategy(p, qt; kw...),
+            Legato.default_solver_strategy(p, qt; kw...),
         post_process = Function[],
         state = nothing,
     )
 
-    @test s isa Stretto.CompilationStrategy
+    @test s isa Legato.CompilationStrategy
     @test s.name === :test
     @test s.description == "test strategy"
     @test s.post_process isa Vector{Function}
@@ -166,11 +166,11 @@ const DEFAULT_STRATEGY = CompilationStrategy(
 end
 
 @testitem "CompilationStrategy — default-filling constructor" begin
-    using Stretto
+    using Legato
 
     # Minimal construction: only name and matches required; everything else
     # defaults to the substrate seams.
-    s = Stretto.CompilationStrategy(
+    s = Legato.CompilationStrategy(
         name = :minimal,
         description = "uses all substrate defaults",
         matches = (c, d) -> 0.0,
@@ -190,64 +190,64 @@ end
 end
 
 @testitem "strategy registry — register / unregister / list" begin
-    using Stretto
+    using Legato
 
     # Snapshot initial registry state (:default may be present if Task 7 landed)
-    initial = copy(Stretto.strategies())
+    initial = copy(Legato.strategies())
 
-    s = Stretto.CompilationStrategy(
+    s = Legato.CompilationStrategy(
         name = :test_register,
         description = "registry test",
         matches = (c, d) -> 0.0,
     )
 
-    returned = Stretto.register_strategy!(s)
+    returned = Legato.register_strategy!(s)
     @test returned === s
-    @test haskey(Stretto.strategies(), :test_register)
-    @test Stretto.strategies()[:test_register] === s
+    @test haskey(Legato.strategies(), :test_register)
+    @test Legato.strategies()[:test_register] === s
 
-    Stretto.unregister_strategy!(:test_register)
-    @test !haskey(Stretto.strategies(), :test_register)
+    Legato.unregister_strategy!(:test_register)
+    @test !haskey(Legato.strategies(), :test_register)
 
     # Confirm we didn't disturb :default or anything else
-    @test keys(Stretto.strategies()) == keys(initial)
+    @test keys(Legato.strategies()) == keys(initial)
 end
 
 @testitem "strategy registry — overwrite warning" begin
-    using Stretto
+    using Legato
 
-    s1 = Stretto.CompilationStrategy(
+    s1 = Legato.CompilationStrategy(
         name = :test_overwrite,
         description = "first",
         matches = (c, d) -> 0.0,
     )
-    s2 = Stretto.CompilationStrategy(
+    s2 = Legato.CompilationStrategy(
         name = :test_overwrite,
         description = "second",
         matches = (c, d) -> 0.0,
     )
 
-    Stretto.register_strategy!(s1)
+    Legato.register_strategy!(s1)
     # Second register should warn, not throw
-    @test_logs (:warn, r"overwriting strategy") Stretto.register_strategy!(s2)
-    @test Stretto.strategies()[:test_overwrite].description == "second"
+    @test_logs (:warn, r"overwriting strategy") Legato.register_strategy!(s2)
+    @test Legato.strategies()[:test_overwrite].description == "second"
 
-    Stretto.unregister_strategy!(:test_overwrite)
+    Legato.unregister_strategy!(:test_overwrite)
 end
 
 @testitem "select_strategy — falls back to :default when pool is empty" begin
-    using Stretto
+    using Legato
 
     # Register only :default (Task 7 will do this at module load; here we
     # emulate by clearing and re-registering a minimal default).
-    for name in collect(keys(Stretto.strategies()))
-        name == :default || Stretto.unregister_strategy!(name)
+    for name in collect(keys(Legato.strategies()))
+        name == :default || Legato.unregister_strategy!(name)
     end
 
     # Ensure :default exists for this test (created here if Task 7 hasn't landed)
-    if !haskey(Stretto.strategies(), :default)
-        Stretto.register_strategy!(
-            Stretto.CompilationStrategy(
+    if !haskey(Legato.strategies(), :default)
+        Legato.register_strategy!(
+            Legato.CompilationStrategy(
                 name = :default,
                 description = "test-only default placeholder",
                 matches = (c, d) -> 0.0,
@@ -258,59 +258,59 @@ end
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    selected = Stretto.select_strategy(circuit, device)
+    selected = Legato.select_strategy(circuit, device)
     @test selected.name === :default
 end
 
 @testitem "select_strategy — picks highest-scoring non-default strategy" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    low = Stretto.CompilationStrategy(
+    low = Legato.CompilationStrategy(
         name = :low_score,
         description = "",
         matches = (c, d) -> 0.1,
     )
-    high = Stretto.CompilationStrategy(
+    high = Legato.CompilationStrategy(
         name = :high_score,
         description = "",
         matches = (c, d) -> 0.9,
     )
-    Stretto.register_strategy!(low)
-    Stretto.register_strategy!(high)
+    Legato.register_strategy!(low)
+    Legato.register_strategy!(high)
 
-    selected = Stretto.select_strategy(circuit, device)
+    selected = Legato.select_strategy(circuit, device)
     @test selected.name === :high_score
 
-    Stretto.unregister_strategy!(:low_score)
-    Stretto.unregister_strategy!(:high_score)
+    Legato.unregister_strategy!(:low_score)
+    Legato.unregister_strategy!(:high_score)
 end
 
 @testitem "select_strategy — all-zero scores fall back to :default" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    zero_strat = Stretto.CompilationStrategy(
+    zero_strat = Legato.CompilationStrategy(
         name = :zero_test,
         description = "",
         matches = (c, d) -> 0.0,
     )
-    Stretto.register_strategy!(zero_strat)
+    Legato.register_strategy!(zero_strat)
 
-    selected = Stretto.select_strategy(circuit, device)
+    selected = Legato.select_strategy(circuit, device)
     @test selected.name === :default
 
-    Stretto.unregister_strategy!(:zero_test)
+    Legato.unregister_strategy!(:zero_test)
 end
 
 @testitem ":default strategy registered at module load" begin
-    using Stretto
+    using Legato
 
-    reg = Stretto.strategies()
+    reg = Legato.strategies()
     @test haskey(reg, :default)
 
     default = reg[:default]

@@ -16,7 +16,7 @@
 # To run:
 #   OPENBLAS_NUM_THREADS=1 julia --project=. -t auto scripts/qft4_heronr3.jl
 
-using Stretto
+using Legato
 using Piccolo: duration
 
 device = HeronR3()

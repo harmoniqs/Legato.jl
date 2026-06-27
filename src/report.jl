@@ -101,7 +101,7 @@ function Base.show(io::IO, r::CompilationReport)
     dur_ratio = r.gate_duration_ns / max(r.pulse_duration_ns, 1e-10)
     err_ratio = r.gate_error / max(r.pulse_error, 1e-15)
     println(io, "")
-    println(io, "Stretto Compilation Report")
+    println(io, "Legato Compilation Report")
     println(io, "Circuit: $(r.circuit_name) ($(r.n_qubits)Q)  │  Target: $(r.device_name)")
     println(io, "─" ^ 58)
     println(io, "                  Gate-Level     Pulse-Level    Improvement")
@@ -139,7 +139,7 @@ end
 
 @testitem "CompilationReport display" begin
     # Construct a report directly (no compile) to keep the test fast.
-    report = Stretto.CompilationReport(
+    report = Legato.CompilationReport(
         "2Q circuit (2 gates)",  # circuit_name
         "ibm_heron_r3",            # device_name
         2,                          # n_qubits
@@ -154,6 +154,6 @@ end
     buf = IOBuffer()
     show(buf, report)
     output = String(take!(buf))
-    @test occursin("Stretto", output)
+    @test occursin("Legato", output)
     @test occursin("Duration", output)
 end

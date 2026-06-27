@@ -18,7 +18,7 @@ Parse a small OpenQASM 3 circuit into a [`GateCircuit`](@ref).
 The supported subset is intentionally static: one qubit register declaration,
 standard gate statements for `h`, `cx`, `cz`, `x`, `y`, `z`, `s`, `t`, and
 `ccx`, and optional `include` statements. OpenQASM qubit indices are 0-based;
-the returned `GateOp`s use Stretto's 1-based indexing.
+the returned `GateOp`s use Legato's 1-based indexing.
 """
 function from_qasm(qasm::String)
     saw_header = false
@@ -181,7 +181,7 @@ end
 
 @testitem "from_qasm — Bell circuit" begin
     using LinearAlgebra
-    using Stretto
+    using Legato
 
     qasm = """
     OPENQASM 3;
@@ -200,7 +200,7 @@ end
 
 @testitem "from_qasm — supported static gate names" begin
     using LinearAlgebra
-    using Stretto
+    using Legato
 
     qasm = """
     OPENQASM 3.0;
@@ -224,7 +224,7 @@ end
 end
 
 @testitem "from_qasm — multiple statements per line and comments" begin
-    using Stretto
+    using Legato
 
     qasm = """
     OPENQASM 3; include "stdgates.inc"; // exported tools may compact statements
@@ -237,7 +237,7 @@ end
 end
 
 @testitem "from_qasm — rejects parametric gates" begin
-    using Stretto
+    using Legato
 
     qasm = """
     OPENQASM 3;
@@ -249,7 +249,7 @@ end
 end
 
 @testitem "from_qasm — rejects out-of-range qubits" begin
-    using Stretto
+    using Legato
 
     qasm = """
     OPENQASM 3;
@@ -261,7 +261,7 @@ end
 end
 
 @testitem "from_qasm — rejects unsupported QASM input" begin
-    using Stretto
+    using Legato
 
     @test_throws ArgumentError from_qasm("""
     qubit[1] q;

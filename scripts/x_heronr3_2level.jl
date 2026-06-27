@@ -1,4 +1,4 @@
-# Single-qubit X gate on a 2-level HeronR3 — public Stretto demo.
+# Single-qubit X gate on a 2-level HeronR3 — public Legato demo.
 #
 # Run from the package root:
 #     OPENBLAS_NUM_THREADS=1 julia --project=. scripts/x_heronr3_2level.jl
@@ -12,7 +12,7 @@
 # n_levels = 3 to add the |2⟩ leakage level back in (slower, more realistic).
 
 using Random
-using Stretto
+using Legato
 
 Random.seed!(0xc0ffee)
 
@@ -33,7 +33,7 @@ report = compile(
 )
 t = time() - t0
 
-println("\n=== Stretto Compilation Report ===")
+println("\n=== Legato Compilation Report ===")
 println("Gate            : X")
 println("Device          : ", device.name, "  (", device.qubits[1].n_levels, " levels)")
 println("Pulse fidelity  : ", round(report.pulse_fidelity, digits = 5))

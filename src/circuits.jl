@@ -1,7 +1,7 @@
 """
     AbstractCircuit
 
-Base type for quantum circuits in Stretto.
+Base type for quantum circuits in Legato.
 """
 abstract type AbstractCircuit end
 

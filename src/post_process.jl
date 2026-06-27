@@ -59,7 +59,7 @@ shared axis: frequency in GHz on the x-axis, power on a log-scale y-axis.
 Keyword arguments beyond `n_samples` are forwarded to the `Makie.Axis`.
 
 Defined as a stub here; the implementation is provided by the
-`StrettoMakieExt` extension and is loaded when a Makie backend (`CairoMakie`,
+`LegatoMakieExt` extension and is loaded when a Makie backend (`CairoMakie`,
 `GLMakie`, `WGLMakie`) is available.
 
 See also [`pulse_spectrum`](@ref).
@@ -68,7 +68,7 @@ function plot_pulse_spectrum end
 
 
 @testitem "PostProcessContext — basic construction" begin
-    using Stretto
+    using Legato
     using Piccolo: UnitaryTrajectory, CubicSplinePulse, QuantumSystem, SplinePulseProblem
 
     σz = ComplexF64[1 0; 0 -1];
@@ -88,7 +88,7 @@ function plot_pulse_spectrum end
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    ctx = Stretto.PostProcessContext(circuit, device, qtraj, problem)
+    ctx = Legato.PostProcessContext(circuit, device, qtraj, problem)
     @test ctx.circuit === circuit
     @test ctx.device === device
     @test ctx.qtraj === qtraj
@@ -96,15 +96,15 @@ function plot_pulse_spectrum end
 end
 
 @testitem "default_post_process — substrate is empty list" begin
-    using Stretto
+    using Legato
 
-    pp = Stretto.default_post_process()
+    pp = Legato.default_post_process()
     @test pp isa Vector
     @test isempty(pp)
 end
 
 @testitem "pulse_spectrum — sine pulses peak at known frequencies" begin
-    using Stretto
+    using Legato
     using Piccolo: ZeroOrderPulse
 
     f₁, f₂ = 0.05, 0.20  # GHz
@@ -128,7 +128,7 @@ end
 end
 
 @testitem "pulse_spectrum — constant pulse is pure DC" begin
-    using Stretto
+    using Legato
     using Piccolo: ZeroOrderPulse
 
     times = collect(range(0.0, 50.0, length = 101))

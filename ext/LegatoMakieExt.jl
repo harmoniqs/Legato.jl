@@ -1,13 +1,13 @@
-module StrettoMakieExt
+module LegatoMakieExt
 
-using Stretto
+using Legato
 using Makie
 
 using Piccolo: AbstractPulse
 
-# Implementation of the stub in `src/post_process.jl` — extend the Stretto
+# Implementation of the stub in `src/post_process.jl` — extend the Legato
 # function. Docstring lives on the stub.
-function Stretto.plot_pulse_spectrum(
+function Legato.plot_pulse_spectrum(
     pulse::AbstractPulse;
     n_samples::Int = 1000,
     title = "Pulse power spectrum",

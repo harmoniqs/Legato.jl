@@ -42,7 +42,7 @@ Install `f` as the problem builder. `f` must have signature
 set_build_problem!(f) = (_BUILD_PROBLEM[] = f)
 
 @testitem "build_problem — substrate constructs SmoothPulseProblem" begin
-    using Stretto
+    using Legato
     using Piccolo: UnitaryTrajectory, ZeroOrderPulse, QuantumSystem, QuantumControlProblem
 
     σz = ComplexF64[1 0; 0 -1];
@@ -56,7 +56,7 @@ set_build_problem!(f) = (_BUILD_PROBLEM[] = f)
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    problem = Stretto.build_problem(circuit, device, qtraj; N_knots = 5)
+    problem = Legato.build_problem(circuit, device, qtraj; N_knots = 5)
     # Piccolo's concrete problem type returned by SmoothPulseProblem.
     # (Piccolo does not export an `AbstractPiccoloProblem` supertype.)
     @test problem isa QuantumControlProblem

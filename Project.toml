@@ -1,6 +1,6 @@
-name = "Stretto"
-uuid = "6542ec78-ee1b-4af1-b08f-242328baa654"
-version = "0.4.0"
+name = "Legato"
+uuid = "2220d95b-0ec6-412e-99be-c6a5d269006d"
+version = "0.5.0"
 authors = ["Aaron Trowbridge <aaron@harmoniqs.co> and contributors"]
 
 [deps]
@@ -16,7 +16,7 @@ TestItems = "1c621080-faea-4a02-84b6-bbd5e436b8fe"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 
 [extensions]
-StrettoMakieExt = "Makie"
+LegatoMakieExt = "Makie"
 
 [compat]
 FFTW = "1.8"

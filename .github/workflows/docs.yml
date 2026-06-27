@@ -47,9 +47,9 @@ jobs:
       - run: |
           julia --project=docs -e '
             using Documenter: DocMeta, doctest
-            using Stretto
-            DocMeta.setdocmeta!(Stretto, :DocTestSetup, :(using Stretto); recursive=true)
-            doctest(Stretto)'
+            using Legato
+            DocMeta.setdocmeta!(Legato, :DocTestSetup, :(using Legato); recursive=true)
+            doctest(Legato)'
 
   tagbot-dispatch:
     name: Dispatch on TagBot Release

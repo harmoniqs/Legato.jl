@@ -61,7 +61,7 @@ IBM Heron r2 device profile for the ibm_fez, ibm_kingston, and
 ibm_marrakesh processor family.
 
 Heavy-hex topology, CZ-native, 156 qubits. This profile follows `HeronR3`
-by modeling an 8-qubit linear subset for fast Stretto benchmarks. Published
+by modeling an 8-qubit linear subset for fast Legato benchmarks. Published
 processor-level values are used for CZ, T1, and T2. Qubit frequencies,
 anharmonicities, and coupling strengths are representative values following
 the existing profile convention, not machine-specific daily calibration data.
@@ -147,7 +147,7 @@ function IQMEmerald()
 end
 
 @testitem "IQMEmerald — calibration data integrity" begin
-    using Stretto
+    using Legato
     device = IQMEmerald()
     @test isnan(device.T2[46])                           # QB46 T2 not measured → NaN
     @test length(device.edges) == 83                     # Crystal 54 topology

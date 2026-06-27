@@ -130,11 +130,11 @@ end
 @testitem "HeronR2 n_levels keyword" begin
     device = HeronR2(n_levels = 2)
     @test all(q.n_levels == 2 for q in device.qubits)
-    @test Stretto.subsystem_levels(device, [1, 2]) == [2, 2]
+    @test Legato.subsystem_levels(device, [1, 2]) == [2, 2]
 end
 
 @testitem "HeronR2 compiles a 2-qubit block" tags = [:integration] begin
-    using Stretto
+    using Legato
     device = HeronR2(n_levels = 2)
     result = compile_block(
         qft_circuit(2),
@@ -144,7 +144,7 @@ end
         T_ns = 20.0,
         N_knots = 5,
     )
-    @test result isa Stretto.BlockResult
+    @test result isa Legato.BlockResult
     @test result.n_qubits == 2
     @test 0.0 <= result.fidelity <= 1.0
 end
@@ -163,5 +163,5 @@ end
 
 @testitem "subsystem_levels accessor" begin
     device = HeronR3()
-    @test Stretto.subsystem_levels(device, [1, 2]) == [3, 3]
+    @test Legato.subsystem_levels(device, [1, 2]) == [3, 3]
 end

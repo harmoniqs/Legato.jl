@@ -86,5 +86,5 @@ jobs:
           '
       - name: Run full test suite (including :piccolissimo + :integration)
         env:
-          STRETTO_FULL_TESTS: "1"
+          LEGATO_FULL_TESTS: "1"
         run: julia --project=. --color=yes test/runtests.jl

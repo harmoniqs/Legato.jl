@@ -22,10 +22,10 @@ Install `f` as the classifier. `f` must have signature
 set_classify_problem!(f) = (_CLASSIFY_PROBLEM[] = f)
 
 @testitem "classify_problem — substrate returns :generic" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
 
-    @test Stretto.classify_problem(circuit, device) === :generic
+    @test Legato.classify_problem(circuit, device) === :generic
 end

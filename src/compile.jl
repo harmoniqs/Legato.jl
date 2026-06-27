@@ -100,7 +100,7 @@ function compile(
     # Partition via the strategy's partitioner (not the global seam)
     blocks = strat.partitioner(circuit, device)
     length(blocks) == 1 || error(
-        "Multi-block compilation requires a Stretto release that can glue block results into a joint report. v0.3 accepts only single-block strategies.",
+        "Multi-block compilation requires a Legato release that can glue block results into a joint report. v0.3 accepts only single-block strategies.",
     )
 
     spec = blocks[1]
@@ -185,12 +185,12 @@ end
 # ============================================================================ #
 # Tests
 # ============================================================================ #
-# Stretto's default test suite uses Piccolo's BilinearIntegrator. Multi-qubit
+# Legato's default test suite uses Piccolo's BilinearIntegrator. Multi-qubit
 # integration tests live in the private Strettissimo package, which overrides
 # `default_integrator` with Piccolissimo's SplineIntegrator.
 
 @testitem "default_integrator — substrate returns BilinearIntegrator" begin
-    using Stretto
+    using Legato
     using Piccolo: BilinearIntegrator, UnitaryTrajectory, CubicSplinePulse, QuantumSystem
 
     σz = ComplexF64[1 0; 0 -1]
@@ -200,12 +200,12 @@ end
     pulse = CubicSplinePulse(zeros(1, 5), zeros(1, 5), times)
     qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
 
-    integ = Stretto.default_integrator(qtraj, 5)
+    integ = Legato.default_integrator(qtraj, 5)
     @test integ isa BilinearIntegrator
 end
 
 @testitem "default_initial_pulse — substrate returns zero-boundary ZeroOrderPulse" begin
-    using Stretto
+    using Legato
     using Piccolo: ZeroOrderPulse, duration
 
     times = collect(range(0.0, 10.0, length = 5))
@@ -213,7 +213,7 @@ end
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
     device = HeronR3()
 
-    pulse = Stretto.default_initial_pulse(circuit, device, times, n_drives)
+    pulse = Legato.default_initial_pulse(circuit, device, times, n_drives)
 
     @test pulse isa ZeroOrderPulse
     @test duration(pulse) ≈ 10.0
@@ -226,7 +226,7 @@ end
 end
 
 @testitem "default_solver_strategy — substrate returns fidelity + pulse tuple" begin
-    using Stretto
+    using Legato
     using Piccolo:
         AbstractPulse,
         QuantumSystem,
@@ -246,16 +246,16 @@ end
     times = collect(range(0.0, 10.0, length = 5))
     pulse = CubicSplinePulse(zeros(1, 5), zeros(1, 5), times)
     qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
-    qcp = SplinePulseProblem(qtraj; integrator = Stretto.default_integrator(qtraj, 5))
+    qcp = SplinePulseProblem(qtraj; integrator = Legato.default_integrator(qtraj, 5))
 
-    result_pulse, fid = Stretto.default_solver_strategy(qcp, qtraj; max_iter = 2)
+    result_pulse, fid = Legato.default_solver_strategy(qcp, qtraj; max_iter = 2)
 
     @test result_pulse isa AbstractPulse
     @test 0.0 ≤ fid ≤ 1.0
 end
 
 @testitem "compile — strategy=nothing dispatches via select_strategy (falls to :default)" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
@@ -264,8 +264,8 @@ end
     # (EmbeddedOperator-on-CompositeQuantumSystem) solve pipeline, which is
     # Piccolo-post-v1.6-only and breaks on registered Piccolo v1.6 / Julia 1.10.
     # Instrument :default's partitioner to throw a sentinel error when called.
-    saved_default = Stretto.strategies()[:default]
-    instrumented = Stretto.CompilationStrategy(
+    saved_default = Legato.strategies()[:default]
+    instrumented = Legato.CompilationStrategy(
         name = :default,
         description = saved_default.description,
         matches = saved_default.matches,
@@ -279,7 +279,7 @@ end
     )
     # Suppress the overwrite warning — we're reinstalling :default on purpose.
     Base.with_logger(Base.NullLogger()) do
-        Stretto.register_strategy!(instrumented)
+        Legato.register_strategy!(instrumented)
     end
 
     try
@@ -297,13 +297,13 @@ end
         # Restore the real :default so subsequent testitems don't inherit the
         # sentinel-partitioner installation.
         Base.with_logger(Base.NullLogger()) do
-            Stretto.register_strategy!(saved_default)
+            Legato.register_strategy!(saved_default)
         end
     end
 end
 
 @testitem "compile — explicit strategy override" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
@@ -312,13 +312,13 @@ end
     # partitioner without running the full solve pipeline (see rationale in
     # the sibling testitem: registered-Piccolo EmbeddedOperator signature gap
     # on Julia 1.10).
-    override_strat = Stretto.CompilationStrategy(
+    override_strat = Legato.CompilationStrategy(
         name = :forced_override_test,
         description = "",
         matches = (c, d) -> 0.0,
         partitioner = (c, d) -> error("SENTINEL_OVERRIDE_CALLED"),
     )
-    Stretto.register_strategy!(override_strat)
+    Legato.register_strategy!(override_strat)
     try
         err = try
             compile(
@@ -336,12 +336,12 @@ end
         @test err !== nothing
         @test occursin("SENTINEL_OVERRIDE_CALLED", sprint(showerror, err))
     finally
-        Stretto.unregister_strategy!(:forced_override_test)
+        Legato.unregister_strategy!(:forced_override_test)
     end
 end
 
 @testitem "compile — unknown strategy throws ArgumentError" begin
-    using Stretto
+    using Legato
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)

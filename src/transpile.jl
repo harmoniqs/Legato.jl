@@ -74,9 +74,9 @@ end
 # ============================================================================ #
 
 @testitem "native_gate_set — HeronR3 exposes CZ, X, SX, H" begin
-    using Stretto
+    using Legato
     device = HeronR3()
-    s = Stretto.native_gate_set(device)
+    s = Legato.native_gate_set(device)
     @test :CZ in s
     @test :X in s
     @test :SX in s
@@ -84,7 +84,7 @@ end
 end
 
 @testitem "to_native — pass-through when all gates native" begin
-    using Stretto
+    using Legato
     device = HeronR3()
     circuit = GateCircuit([GateOp(:CZ, (1, 2)), GateOp(:SX, (1,))], 2)
     out = to_native(circuit, device)
@@ -93,7 +93,7 @@ end
 end
 
 @testitem "to_native — CNOT → H·CZ·H on target qubit" begin
-    using Stretto
+    using Legato
     using LinearAlgebra
 
     device = HeronR3()
@@ -106,7 +106,7 @@ end
     @test U_native ≈ U_orig atol = 1e-12
 
     # And every gate in the output must be in the device's native set
-    ns = Stretto.native_gate_set(device)
+    ns = Legato.native_gate_set(device)
     @test all(op.gate in ns for op in native.ops)
 
     # Specifically: H(2), CZ(1,2), H(2) — three ops
@@ -117,7 +117,7 @@ end
 end
 
 @testitem "to_native — unknown non-native gate throws ArgumentError" begin
-    using Stretto
+    using Legato
     device = HeronR3()
     # :T is in EXTRA_GATES but not native to HeronR3 and has no rewrite rule
     circuit = GateCircuit([GateOp(:T, (1,))], 1)

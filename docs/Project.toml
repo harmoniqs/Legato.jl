@@ -4,4 +4,12 @@ Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
 LiveServer = "16fef848-5104-11e9-1b77-fb7a48bbb589"
 PiccoloDocsTemplate = "a90a139f-c522-4b23-980b-4210ddb8d065"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
-Stretto = "6542ec78-ee1b-4af1-b08f-242328baa654"
+Legato = "2220d95b-0ec6-412e-99be-c6a5d269006d"
+
+# Legato is not yet registered (renamed from Stretto with a new uuid), so the
+# docs environment resolves it from the in-repo source rather than a registry.
+# This stays valid after registration and is the standard way to build docs
+# against the working tree. Remove once Legato is registered if you prefer
+# registry resolution.
+[sources]
+Legato = {path = ".."}
