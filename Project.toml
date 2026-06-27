@@ -1,6 +1,6 @@
 name = "Legato"
 uuid = "2220d95b-0ec6-412e-99be-c6a5d269006d"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Aaron Trowbridge <aaron@harmoniqs.co> and contributors"]
 
 [deps]
