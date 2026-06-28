@@ -1,0 +1,31 @@
+\documentclass[border=4pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{quantikz, calc, arrows.meta, positioning}
+\usepackage{quantikz}
+
+\begin{document}
+% Use `right=of` relative positioning with a fixed `node distance` so the
+% gap circuit→arrow equals the gap arrow→gate by construction.
+\begin{tikzpicture}[node distance=0.6cm]
+
+% LEFT: the circuit
+\node (left) {%
+\begin{quantikz}[row sep={1.0cm,between origins}, column sep=0.30cm]
+\lstick{$q_1$} & \gate{H} & \ctrl{1} & \gate{H} & \gate{T} & \ctrl{1} & \qw \\
+\lstick{$q_2$} & \qw      & \targ{}  & \qw      & \gate{Z} & \ctrl{-1}& \qw
+\end{quantikz}
+};
+
+% ARROW: positioned a fixed distance to the right of the circuit.
+\node[right=of left, font=\Large\sffamily\bfseries] (arrow) {$\Longrightarrow$};
+
+% RIGHT: a single 2-qubit block U_\text{circ}, same fixed distance from the arrow.
+\node[right=of arrow] (right) {%
+\begin{quantikz}[row sep={1.0cm,between origins}, column sep=0.30cm]
+\lstick{$q_1$} & \gate[2]{U_\text{circ}} & \qw \\
+\lstick{$q_2$} &                          & \qw
+\end{quantikz}
+};
+
+\end{tikzpicture}
+\end{document}
