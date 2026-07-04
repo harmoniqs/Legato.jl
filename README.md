@@ -1,5 +1,6 @@
 # Legato.jl
 
+<!--```@raw html-->
 <div align="center">
   <table>
     <tr>
@@ -33,12 +34,15 @@
     </tr>
   </table>
 </div>
+<!--```-->
 
 > **A circuit isn't a sequence of gates. It's a unitary. Compile it as one.**
 
+<!--```@raw html-->
 <p align="center">
-  <img src="docs/src/assets/circuit_to_pulse.png" alt="Legato compiles a circuit into a single block unitary" width="700"/>
+  <img src="assets/circuit_to_pulse.png" alt="Legato compiles a circuit into a single block unitary" width="700"/>
 </p>
+<!--```-->
 
 **Legato.jl** is the circuit-to-pulse compilation layer of the [Piccolo.jl](https://github.com/harmoniqs/Piccolo.jl) ecosystem. Given a gate-level circuit and a hardware device profile, Legato synthesizes a single optimized control pulse that implements the whole circuit as one block unitary $U$ — skipping gate decomposition, scheduling, and gate-boundary error accumulation.
 
@@ -169,8 +173,6 @@ julia --project=docs docs/make.jl
 ## See also
 
 - [Piccolo.jl](https://github.com/harmoniqs/Piccolo.jl) — the quantum optimal control engine Legato sits on top of.
-- [spec-20260418-stretto-strettissimo-split](amico/vault/specs/spec-20260418-stretto-strettissimo-split.md) — design doc for the public/private split and seam contract.
-- [spec-20260413-qec-pulse-kernels](amico/vault/specs/spec-20260413-qec-pulse-kernels.md) — the flagship QEC-kernel compilation application.
 
 ---
 
