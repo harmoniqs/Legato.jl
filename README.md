@@ -151,9 +151,10 @@ For multi-qubit problems Legato's default `BilinearIntegrator` can exhaust memor
 |---|---|
 | v0.2 | Circuit IR, device profiles, `compile_block`, four substrate seams |
 | v0.3 | `CompilationStrategy` registry, `select_strategy`, `:default` strategy |
-| **v0.4** | **`to_native(circuit, device)` transpile pass** |
-| v0.5 (planned) | QASM import |
-| v0.6+ | Framework adapters (Qiskit / Cirq via PythonCall) |
+| v0.4 | `to_native(circuit, device)` transpile pass |
+| **v0.5** | **Rename Stretto → Legato (re-registered under a new UUID)** |
+| v0.6 (planned) | QASM import |
+| v0.7+ | Framework adapters (Qiskit / Cirq via PythonCall) |
 
 ## Contributing
 
