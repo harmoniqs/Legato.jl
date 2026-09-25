@@ -17,7 +17,6 @@
 #   OPENBLAS_NUM_THREADS=1 julia --project=. -t auto scripts/qft4_heronr3.jl
 
 using Legato
-using Piccolo: duration
 
 device = HeronR3()
 circuit = qft_circuit(4)

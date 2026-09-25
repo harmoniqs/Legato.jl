@@ -206,7 +206,11 @@ end
 
 @testitem "default_initial_pulse — substrate returns zero-boundary ZeroOrderPulse" begin
     using Legato
-    using Piccolo: ZeroOrderPulse, duration
+    using Piccolo: ZeroOrderPulse
+    # Import from the declaring module: the transitive `Piccolo` re-export of
+    # `duration` is ambiguous (NT's TimeWarp also exports one — Piccolo#323)
+    # and undefined on import (nightly Julia surfaces this as an UndefVarError).
+    using Piccolo.Quantum.Pulses: duration
 
     times = collect(range(0.0, 10.0, length = 5))
     n_drives = 2

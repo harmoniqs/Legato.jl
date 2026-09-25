@@ -8,6 +8,11 @@ on:
     branches:
       - main
     tags: ['*']
+  # Weekly stable-Julia run: registry drift (e.g. the #42 `duration` re-export
+  # collision that sat latent until NamedTrajectories 0.9.4 hit the registry)
+  # otherwise surfaces only when a PR happens — quarterly, not daily.
+  schedule:
+    - cron: '0 3 * * 1'
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}

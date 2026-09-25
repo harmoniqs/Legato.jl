@@ -21,7 +21,6 @@ using Piccolo:
     AbstractPulse,
     CubicSplinePulse,
     ZeroOrderPulse,
-    duration,
     n_drives,
     # Trajectories
     UnitaryTrajectory,
@@ -36,6 +35,12 @@ using Piccolo:
     fidelity,
     get_trajectory,
     extract_pulse
+
+# `duration` cannot come through the `Piccolo` re-export surface: NT >= 0.9.3
+# exports TimeWarp's `duration`, which collides with Quantum.Pulses' in
+# Piccolo's namespace (Piccolo#323), leaving the top-level binding ambiguous
+# and undefined on import. Bind it from the declaring module instead.
+using Piccolo.Quantum.Pulses: duration
 
 """
     default_integrator(qtraj, N)
