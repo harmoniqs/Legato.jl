@@ -16,7 +16,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install JuliaFormatter and format
         run: |
-          julia --color=yes -e 'using Pkg; Pkg.add(PackageSpec(name="JuliaFormatter"))'
+          julia --color=yes -e 'using Pkg; Pkg.add(PackageSpec(name="JuliaFormatter", version="2.6.4"))'
           julia --color=yes -e 'using JuliaFormatter; format(".", verbose=true)'
       - name: Commit formatted code
         if: github.event_name == 'workflow_dispatch'
