@@ -299,3 +299,32 @@ end
     cx q[0], q[0];
     """)
 end
+
+@testitem "from_qasm — rejects malformed include statements" begin
+    using Legato
+
+    # `include` with an unquoted filename looks like an include statement but
+    # fails the quoted-path form; the parser must reject it by line number
+    # (not confuse it with a gate or the valid `include "file"` form).
+    err = try
+        from_qasm("""
+        OPENQASM 3;
+        include stdgates.inc;
+        qubit[1] q;
+        h q[0];
+        """)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("Invalid OpenQASM include statement on line 2", sprint(showerror, err))
+
+    # The well-formed quoted include is still accepted alongside it
+    @test from_qasm("""
+    OPENQASM 3;
+    include "stdgates.inc";
+    qubit[1] q;
+    h q[0];
+    """) isa GateCircuit
+end

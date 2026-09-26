@@ -183,3 +183,21 @@ end
     expected = GATES[:CZ] * H_embed
     @test U ≈ expected atol=1e-12
 end
+
+@testitem "length — counts gate operations" begin
+    two_ops = GateCircuit([GateOp(:H, (1,)), GateOp(:CZ, (1, 2))], 2)
+    @test length(two_ops) == 2
+    @test length(GateCircuit(GateOp[], 1)) == 0
+end
+
+@testitem "circuit_unitary — unknown gate errors with the gate name" begin
+    bad = GateCircuit([GateOp(:MYSTERY, (1,))], 1)
+    err = try
+        circuit_unitary(bad)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ErrorException
+    @test occursin("Unknown gate :MYSTERY", sprint(showerror, err))
+end
