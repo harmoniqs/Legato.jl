@@ -352,3 +352,114 @@ end
 
     @test_throws ArgumentError compile(circuit, device; strategy = :nonexistent_xyz)
 end
+
+@testitem "compile — single-block strategy composes seams into a CompilationReport" begin
+    using Legato
+    using Piccolo: ZeroOrderPulse
+
+    # Orchestration contract under test: partition → seam composition →
+    # post-process chain → report. build_problem and solver_strategy are
+    # stubs (the real solve pipeline is compile_block's :integration item);
+    # everything else (system build, embedding, trajectory, baseline, report)
+    # runs for real.
+    circuit = GateCircuit([GateOp(:H, (1,))], 1)
+    device = HeronR3(n_levels = 2)
+
+    captured_pulse = Ref{Any}(nothing)
+    captured_ctx = Ref{Any}(nothing)
+    post_process_calls = Symbol[]
+
+    # (Named local functions rather than inline lambdas: a `begin...end`
+    # block cannot appear inside a typed array literal — `Function[begin...]`
+    # parses as indexing at `begin`.)
+    function make_pulse(c, d, times, n_drives)
+        captured_pulse[] = ZeroOrderPulse(
+            zeros(n_drives, length(times)),
+            times;
+            initial_value = zeros(n_drives),
+            final_value = zeros(n_drives),
+        )
+        return captured_pulse[]
+    end
+    function pp_record(block, ctx)
+        captured_ctx[] = ctx
+        push!(post_process_calls, :first)
+        return block
+    end
+    function pp_halve(block, ctx)
+        push!(post_process_calls, :second)
+        return Legato.BlockResult(block.pulse, block.fidelity / 2, block.n_qubits)
+    end
+
+    stub = Legato.CompilationStrategy(
+        name = :stub_orchestration_test,
+        description = "stub seams; orchestration only",
+        matches = (c, d) -> 0.0,
+        integrator = (qtraj, N) -> :stub_integrator,
+        initial_pulse = make_pulse,
+        partitioner = (c, d) -> Legato.BlockSpec[Legato.BlockSpec(c, [1])],
+        build_problem = (c, d, qt; kw...) -> :stub_problem,
+        solver_strategy = (problem, qt; max_iter) -> (captured_pulse[], 0.937),
+        post_process = Function[pp_record, pp_halve],
+    )
+    Legato.register_strategy!(stub)
+    try
+        report = compile(
+            circuit,
+            device;
+            strategy = :stub_orchestration_test,
+            max_iter = 2,
+            T_ns = 20.0,
+            N_knots = 5,
+        )
+
+        @test report isa CompilationReport
+        # Post-process chain ran in order and halved the stub fidelity
+        @test post_process_calls == [:first, :second]
+        @test report.pulse_fidelity ≈ 0.937 / 2
+        # ctx carries the real circuit/device/trajectory plus the stub problem
+        @test captured_ctx[] isa Legato.PostProcessContext
+        @test captured_ctx[].circuit === circuit
+        @test captured_ctx[].device === device
+        @test captured_ctx[].problem === :stub_problem
+        # Report fields: baseline vs pulse result
+        @test report.circuit_name == "1Q circuit (1 gates)"
+        @test report.device_name == device.name
+        @test report.gate_duration_ns == device.native_gates[:H].duration_ns
+        @test report.pulse_duration_ns ≈ 20.0  # duration of the initial pulse (T_ns)
+        @test report.gate_n_gates == 1
+    finally
+        Legato.unregister_strategy!(:stub_orchestration_test)
+    end
+end
+
+@testitem "compile — multi-block partitioner rejected (single-block v0.3 contract)" begin
+    using Legato
+
+    device = HeronR3()
+    circuit = GateCircuit([GateOp(:H, (1,))], 1)
+
+    two_block = Legato.CompilationStrategy(
+        name = :two_block_test,
+        description = "",
+        matches = (c, d) -> 0.0,
+        partitioner = (c, d) -> Legato.BlockSpec[
+            Legato.BlockSpec(GateCircuit([GateOp(:H, (1,))], 1), [1]),
+            Legato.BlockSpec(GateCircuit([GateOp(:X, (1,))], 1), [1]),
+        ],
+    )
+    Legato.register_strategy!(two_block)
+    try
+        err = try
+            compile(circuit, device; strategy = :two_block_test, max_iter = 2)
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing
+        @test err isa ErrorException
+        @test occursin("Multi-block compilation requires", sprint(showerror, err))
+    finally
+        Legato.unregister_strategy!(:two_block_test)
+    end
+end

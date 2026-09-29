@@ -137,6 +137,82 @@ end
     @test baseline.n_gates == 2
 end
 
+@testitem "gate_level_baseline — non-native 1Q gate gets native-SX estimate" begin
+    using Legato
+
+    # :S is a standard extra gate but not native to HeronR3 → single-qubit
+    # decomposition estimate (one SX).
+    device = HeronR3()
+    circuit = GateCircuit([GateOp(:S, (1,))], 1)
+    baseline = gate_level_baseline(circuit, device)
+    sx = device.native_gates[:SX]
+
+    @test baseline.total_duration_ns == sx.duration_ns
+    @test baseline.total_error ≈ 1 - (1 - sx.error_rate)
+    @test baseline.n_gates == 1
+end
+
+@testitem "gate_level_baseline — CNOT (alias) gets CZ + 2 SX estimate" begin
+    using Legato
+
+    # bell_circuit = H (native) + CNOT (alias, not native on HeronR3) → the
+    # 2-qubit decomposition estimate: 1 CZ + 2 single-qubit gates.
+    device = HeronR3()
+    circuit = bell_circuit()
+    baseline = gate_level_baseline(circuit, device)
+    h = device.native_gates[:H]
+    cz = device.native_gates[:CZ]
+    sx = device.native_gates[:SX]
+
+    @test baseline.total_duration_ns == h.duration_ns + cz.duration_ns + 2 * sx.duration_ns
+    @test baseline.total_error ≈
+          1 - (1 - h.error_rate) * (1 - cz.error_rate) * (1 - sx.error_rate)^2
+end
+
+@testitem "gate_level_baseline — 3-qubit controlled gate gets 6 CZ + 10 SX estimate" begin
+    using Legato
+
+    # :CCZ is a 3-qubit extra gate (not native) → Toffoli-class estimate.
+    device = HeronR3()
+    circuit = ccz_circuit()
+    baseline = gate_level_baseline(circuit, device)
+    cz = device.native_gates[:CZ]
+    sx = device.native_gates[:SX]
+
+    @test baseline.total_duration_ns == 6 * cz.duration_ns + 10 * sx.duration_ns
+    @test baseline.total_error ≈ 1 - (1 - cz.error_rate)^6 * (1 - sx.error_rate)^10
+end
+
+@testitem "gate_level_baseline — H falls back to 2×SX when device lacks H/SX" begin
+    using Legato
+
+    # IQM Emerald's native gates are PRX and CZ only: H must fall back to the
+    # documented 2-single-qubit-gate estimate with the default SX spec
+    # (25 ns, 0.00035 error).
+    device = IQMEmerald()
+    @test :H ∉ keys(device.native_gates)
+    @test :SX ∉ keys(device.native_gates)
+
+    baseline = gate_level_baseline(GateCircuit([GateOp(:H, (1,))], 1), device)
+
+    @test baseline.total_duration_ns == 2 * 25.0
+    @test baseline.total_error ≈ 1 - (1 - 0.00035)^2
+end
+
+@testitem "gate_level_baseline — unknown gate gets single-qubit estimate" begin
+    using Legato
+
+    # An unrecognised gate symbol must not throw; it degrades to the
+    # single-qubit SX estimate.
+    device = HeronR3()
+    circuit = GateCircuit([GateOp(:Mystery, (1,))], 1)
+    baseline = gate_level_baseline(circuit, device)
+    sx = device.native_gates[:SX]
+
+    @test baseline.total_duration_ns == sx.duration_ns
+    @test baseline.total_error ≈ 1 - (1 - sx.error_rate)
+end
+
 @testitem "CompilationReport display" begin
     # Construct a report directly (no compile) to keep the test fast.
     report = Legato.CompilationReport(

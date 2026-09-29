@@ -123,3 +123,30 @@ end
     circuit = GateCircuit([GateOp(:T, (1,))], 1)
     @test_throws ArgumentError to_native(circuit, device)
 end
+
+@testitem "to_native — rewrite to a non-native, non-rewritable gate throws" begin
+    using Legato
+
+    # Toy device with :X as its only native gate: the CNOT → H·CZ·H rewrite
+    # lands on gates the device can't run and can't rewrite further, so
+    # to_native must reject the circuit instead of emitting non-native ops.
+    toy = TransmonDevice(
+        "toy_x_only",
+        [TransmonQubit(5.0, 0.2, 2), TransmonQubit(4.9, 0.2, 2)],
+        [CouplingEdge(1, 2, 0.003)],
+        Dict(:X => Legato.GateSpec(25.0, 1e-4)),
+        0.05,
+        [50.0, 50.0],
+        [50.0, 50.0],
+    )
+    circuit = GateCircuit([GateOp(:CNOT, (1, 2))], 2)
+
+    err = try
+        to_native(circuit, toy)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("neither native nor rewritable", sprint(showerror, err))
+end
