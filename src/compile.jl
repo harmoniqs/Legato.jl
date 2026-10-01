@@ -250,7 +250,7 @@ end
     times = collect(range(0.0, 10.0, length = 5))
     pulse = CubicSplinePulse(zeros(1, 5), zeros(1, 5), times)
     qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
-    qcp = SplinePulseProblem(qtraj; integrator = Legato.default_integrator(qtraj, 5))
+    qcp = SplinePulseProblem(qtraj; Legato._pwc_dynamics_kwargs()...)
 
     result_pulse, fid = Legato.default_solver_strategy(qcp, qtraj; max_iter = 2)
 

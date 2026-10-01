@@ -71,6 +71,18 @@ plug in custom integrators without editing Legato source.
 """
 set_default_integrator!(builder) = (_DEFAULT_INTEGRATOR[] = builder; builder)
 
+# Substrate dynamics are knot-only (PWC): the optimizer drives knot values,
+# never a spline's derivative coefficients. Piccolo ≥ 2 requires that contract
+# to be stated explicitly (`integrator_type = :pwc`) — composing a
+# CubicSplinePulse with BilinearIntegrator is a hard error there, and a spline
+# problem's default-integrator path rejects cubic pulses outright (Piccolo
+# #275: the old silent :du drop became a loud guard). Piccolo 1.x predates the
+# kwarg and pairs Bilinear with spline pulses directly — identical knot-only
+# semantics. Both branches compute the same dynamics.
+function _pwc_dynamics_kwargs()
+    return pkgversion(Piccolo) >= v"2.0.0" ? (; integrator_type = :pwc) : (;)
+end
+
 """
     default_initial_pulse(circuit, device, times, n_drives)
 
