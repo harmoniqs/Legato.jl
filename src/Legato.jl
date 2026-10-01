@@ -46,17 +46,17 @@ using Piccolo.Quantum.Pulses: duration
     default_integrator(qtraj, N)
 
 Return the integrator used by `compile_block`. Default: Piccolo's `BilinearIntegrator`,
-adequate for 1-2 qubit problems. When the private `Strettissimo` package is
+adequate for 1-2 qubit problems. When the private `Legatissimo` package is
 loaded, its `__init__` installs a `SplineIntegrator` builder via
 [`set_default_integrator!`](@ref), which scales to 3+ qubit compilation without
 exhausting memory during evaluator construction.
 
-Users who want a different integrator can either load Strettissimo or call
+Users who want a different integrator can either load Legatissimo or call
 `set_default_integrator!` with a custom builder `(qtraj, N) -> integrator`.
 """
 default_integrator(qtraj, N) = _DEFAULT_INTEGRATOR[](qtraj, N)
 
-# Mutable default builder — swapped by Strettissimo's `__init__` at load time.
+# Mutable default builder — swapped by Legatissimo's `__init__` at load time.
 # We indirect through a Ref-held builder function so downstream packages can
 # install overrides without redefining methods on types they don't own.
 const _DEFAULT_INTEGRATOR = Ref{Any}((qtraj, N) -> BilinearIntegrator(qtraj, N))
@@ -66,7 +66,7 @@ const _DEFAULT_INTEGRATOR = Ref{Any}((qtraj, N) -> BilinearIntegrator(qtraj, N))
 
 Install a new builder function for [`default_integrator`](@ref). `builder` must
 accept `(qtraj, N)` and return an `AbstractIntegrator`. Intended primarily for
-use by the private `Strettissimo` package, but callers can also use it to
+use by the private `Legatissimo` package, but callers can also use it to
 plug in custom integrators without editing Legato source.
 """
 set_default_integrator!(builder) = (_DEFAULT_INTEGRATOR[] = builder; builder)
@@ -79,7 +79,7 @@ Gaussian cold start (std = 0.02) on a `ZeroOrderPulse`, zero-clamped at the
 first and last knots — pairs with the substrate `SmoothPulseProblem` template,
 which adds derivative-of-control regularization for cold-start reliability.
 
-Strettissimo overrides this with a catalog-retrieval warm-start keyed on the
+Legatissimo overrides this with a catalog-retrieval warm-start keyed on the
 (circuit fingerprint, device profile) pair, falling back to the substrate on
 catalog miss.
 """
@@ -119,7 +119,7 @@ Execute the solve and return `(pulse, fidelity)`. Substrate: one `solve!` call
 with the given `max_iter`, then `extract_pulse` + `fidelity`. This is the single
 cold-start path.
 
-Strettissimo overrides this with a parallel-multistart strategy that launches K
+Legatissimo overrides this with a parallel-multistart strategy that launches K
 cold starts, solves each, and returns the best-fidelity pair.
 """
 default_solver_strategy(problem, qtraj; max_iter) =
