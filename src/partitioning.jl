@@ -17,7 +17,7 @@ Return a `Vector{BlockSpec}` describing how to decompose `circuit` for
 compilation. Substrate: one block covering the full circuit on qubits
 `1:circuit.n_qubits` — no partitioning.
 
-Strettissimo overrides this with a graph-based partitioner that considers
+Legatissimo overrides this with a graph-based partitioner that considers
 device connectivity, sub-circuit cost estimates, and crosstalk profiles.
 """
 default_partitioner(circuit, device) = _DEFAULT_PARTITIONER[](circuit, device)

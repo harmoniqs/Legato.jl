@@ -5,7 +5,7 @@ Return a problem-class label for dispatch. Substrate: `:generic` for every input
 Strategies' `matches` functions may call this for dispatch shortcuts.
 
 This is a codebase-wide free function (seam #5), not a per-strategy field —
-one classifier per deployment. Richer classification is Strettissimo's concern.
+one classifier per deployment. Richer classification is Legatissimo's concern.
 """
 classify_problem(circuit, device) = _CLASSIFY_PROBLEM[](circuit, device)
 

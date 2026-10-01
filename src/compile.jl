@@ -38,14 +38,14 @@ function compile_block(
     U_goal = EmbeddedOperator(U_target, sys)
 
     # 3. Initial pulse via the seam (substrate: random Gaussian cold start;
-    #    Strettissimo overrides with catalog warm-starts).
+    #    Legatissimo overrides with catalog warm-starts).
     times = collect(range(0.0, T_ns, length = N_knots))
     pulse = default_initial_pulse(circuit, device, times, sys.n_drives)
 
     # 4. Trajectory → Problem → Solve
     qtraj = UnitaryTrajectory(sys, pulse, U_goal)
     # Default integrator seam: Piccolo's BilinearIntegrator is adequate for
-    # 1-2 qubit problems. The private Strettissimo package overrides this via
+    # 1-2 qubit problems. The private Legatissimo package overrides this via
     # `set_default_integrator!` to install Piccolissimo's SplineIntegrator for
     # multi-qubit compilation. Caller can also pass `integrator=` directly.
     integ = integrator === nothing ? default_integrator(qtraj, N_knots) : integrator
@@ -59,7 +59,7 @@ function compile_block(
         free_phase = free_phase,
     )
     # 5. Solve via the strategy seam (substrate: single cold start;
-    #    Strettissimo overrides with parallel multistart).
+    #    Legatissimo overrides with parallel multistart).
     result_pulse, fid = default_solver_strategy(qcp, qtraj; max_iter = max_iter)
 
     return BlockResult(result_pulse, fid, n)
@@ -186,7 +186,7 @@ end
 # Tests
 # ============================================================================ #
 # Legato's default test suite uses Piccolo's BilinearIntegrator. Multi-qubit
-# integration tests live in the private Strettissimo package, which overrides
+# integration tests live in the private Legatissimo package, which overrides
 # `default_integrator` with Piccolissimo's SplineIntegrator.
 
 @testitem "default_integrator — substrate returns BilinearIntegrator" begin

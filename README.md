@@ -97,7 +97,7 @@ Wall clock      : ~120 s on a workstation
 
 The full runnable script is at [`scripts/x_heronr3_2level.jl`](scripts/x_heronr3_2level.jl).
 
-> **For multi-qubit circuits or high-fidelity (≥ 5-nines) results,** the substrate cold-start path isn't enough — install [Strettissimo](#whats-where) to enable parallel multistart, catalog warm-starts, and min-time compression. Public Legato lands you in the right basin; Strettissimo lands you at the bottom.
+> **For multi-qubit circuits or high-fidelity (≥ 5-nines) results,** the substrate cold-start path isn't enough — install [Legatissimo](#whats-where) to enable parallel multistart, catalog warm-starts, and min-time compression. Public Legato lands you in the right basin; Legatissimo lands you at the bottom.
 
 ## Compiling QEC blocks
 
@@ -107,7 +107,7 @@ The flagship use case: compile each block of a multi-block QEC circuit (e.g. sur
 report = compile(syndrome_circuit, device; strategy = :warm_stitch_transmon)
 ```
 
-`:warm_stitch_transmon` (in [Strettissimo](#whats-where), Harmoniqs' private competitive layer) does the full pipeline:
+`:warm_stitch_transmon` (in [Legatissimo](#whats-where), Harmoniqs' private competitive layer) does the full pipeline:
 
 1. **Transpile** to native gates: `to_native(circuit, device)` — pure circuit rewriting, e.g. `CNOT(c,t) → H(t)·CZ(c,t)·H(t)`.
 2. **Schedule** the native gates serially (or with parallelization in v0.4+).
@@ -117,13 +117,13 @@ report = compile(syndrome_circuit, device; strategy = :warm_stitch_transmon)
 
 ## What's where
 
-Legato is a substrate that runs *productively on small problems* with no proprietary dependencies. Harmoniqs' competitive compilation intelligence lives in a private overlay package, **Strettissimo.jl**, which plugs in via Legato's strategy-registry seam:
+Legato is a substrate that runs *productively on small problems* with no proprietary dependencies. Harmoniqs' competitive compilation intelligence lives in a private overlay package, **Legatissimo.jl**, which plugs in via Legato's strategy-registry seam:
 
-| Feature | Legato (public, MIT) | Strettissimo (private) |
+| Feature | Legato (public, MIT) | Legatissimo (private) |
 |---|---|---|
 | Circuit IR (`GateCircuit`, `GateOp`, `circuit_unitary`) | ✅ | — |
 | Gate library (`qft`, `toffoli`, `ccz`, ...) | ✅ | — |
-| Device profiles (`HeronR3`, `Willow`, `Ankaa3`, ...) | ✅ | — |
+| Device profiles (`HeronR3`, `HeronR2`, `IQMEmerald`) | ✅ | — |
 | `to_native` transpile pass | ✅ | — |
 | `compile_block` substrate pipeline | ✅ | — |
 | `BilinearIntegrator` (cold-start, 1-2Q) | ✅ substrate | — |
@@ -143,7 +143,7 @@ using Pkg
 Pkg.add("Legato")
 ```
 
-For multi-qubit problems Legato's default `BilinearIntegrator` can exhaust memory during evaluator construction. Harmoniqs collaborators with access to `Piccolissimo.jl` can swap in a scalable spline-based integrator by loading Strettissimo, which auto-installs the override on `__init__`.
+For multi-qubit problems Legato's default `BilinearIntegrator` can exhaust memory during evaluator construction. Harmoniqs collaborators with access to `Piccolissimo.jl` can swap in a scalable spline-based integrator by loading Legatissimo, which auto-installs the override on `__init__`.
 
 ## Status
 
@@ -153,7 +153,7 @@ For multi-qubit problems Legato's default `BilinearIntegrator` can exhaust memor
 | v0.3 | `CompilationStrategy` registry, `select_strategy`, `:default` strategy |
 | v0.4 | `to_native(circuit, device)` transpile pass |
 | **v0.5** | **Rename Stretto → Legato (re-registered under a new UUID)** |
-| v0.6 (planned) | QASM import |
+| v0.6 | QASM import — `from_qasm` on `main` (single-register, common-gate subset; multi-register + parametric gates in progress) |
 | v0.7+ | Framework adapters (Qiskit / Cirq via PythonCall) |
 
 ## Contributing
