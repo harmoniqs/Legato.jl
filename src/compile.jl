@@ -1,10 +1,133 @@
 """
+Provenance of a block's seed pulse — which branch of the warm-start fallback
+chain resolved, and which catalog entry (if any) seeded the block. Queryable
+programmatically via `BlockResult.seed` and the `CompilationReport` seed
+fields; the chain never resolves silently.
+"""
+struct SeedProvenance
+    branch::Symbol # :library, :retarget, :analytic, :override, :cold
+    entry_id::Union{String,Nothing}
+    detail::String
+end
+
+"""
 Result of compiling a single circuit block to a pulse.
 """
 struct BlockResult
     pulse::AbstractPulse
     fidelity::Float64
     n_qubits::Int
+    seed::SeedProvenance
+end
+
+# Positional compat: direct construction predates provenance and defaults to
+# the cold branch.
+BlockResult(pulse, fidelity, n_qubits) =
+    BlockResult(pulse, fidelity, n_qubits, SeedProvenance(:cold, nothing, ""))
+
+"""
+    resolve_seed(circuit, device, qubit_indices, times, n_drives) -> (pulse, SeedProvenance)
+
+The warm-start fallback chain, in its fixed order:
+
+1. **`:library`** — a hash-exact catalog hit: an entry whose `system_hash`
+   matches the device/subsystem and whose gate matches the block's, loaded
+   with validation-on-load. Requires a catalog via [`set_default_catalog!`](@ref).
+2. **`:retarget`** — the registered retarget override (private tier's plug
+   point, via [`set_default_retarget!`](@ref)) applied to the best near-miss
+   entry (platform+gate match, no hash match). Absent override, or an
+   override returning `nothing`, falls through without error.
+3. **`:analytic`** — the analytic seed generators for single-qubit
+   single-gate blocks in the standard set (`X, Y, SX, SY`); a bound-infeasible
+   analytic seed (duration too short for the drive bound) falls through to
+   the floor rather than failing the compilation.
+4. **`:cold`** / **`:override`** — the existing `default_initial_pulse` seam:
+   the substrate's random-Gaussian cold start, or the private tier's
+   installed override (provenance says which).
+
+Every resolution records where it landed — the chain never resolves
+silently.
+"""
+function resolve_seed(
+    circuit::AbstractCircuit,
+    device::AbstractDevice,
+    qubit_indices::AbstractVector{Int},
+    times::AbstractVector{<:Real},
+    n_drives::Int;
+    floor::Function = default_initial_pulse,
+)
+    # The chain only recognizes single-gate blocks (the catalog and the
+    # analytic generators are per-gate artifacts); anything else goes to the
+    # floor unchanged.
+    if length(circuit) == 1
+        op = first(circuit.ops)
+        catalog = _DEFAULT_CATALOG[]
+        if catalog !== nothing && device isa TransmonDevice
+            hash = compute_system_hash(device, qubit_indices)
+            hits = find_pulses(
+                catalog;
+                platform = "transmon",
+                gate = string(op.gate),
+                system_hash = hash,
+                exact_hash_only = true,
+            )
+            if !isempty(hits)
+                entry = first(hits)
+                pulse, _ = load_pulse(
+                    joinpath(catalog, entry.id);
+                    device = device,
+                    subsystem = qubit_indices,
+                )
+                return pulse,
+                SeedProvenance(:library, entry.id, "hash-exact, validated on load")
+            end
+            retarget = _DEFAULT_RETARGET[]
+            if retarget !== nothing
+                near = find_pulses(catalog; platform = "transmon", gate = string(op.gate))
+                if !isempty(near)
+                    entry = first(near)
+                    pulse = retarget(
+                        entry,
+                        joinpath(catalog, entry.id),
+                        device,
+                        qubit_indices,
+                        times,
+                    )
+                    if pulse !== nothing
+                        return pulse,
+                        SeedProvenance(
+                            :retarget,
+                            entry.id,
+                            "no hash-exact match; retarget override applied",
+                        )
+                    end
+                end
+            end
+        end
+        if device isa TransmonDevice &&
+           op.gate in (:X, :Y, :SX, :SY) &&
+           length(op.qubits) == 1
+            δ = abs(device.qubits[first(op.qubits)].δ)
+            seed = try
+                drag_seed(op.gate, times[end], length(times), device.drive_max, δ)
+            catch err
+                err isa ArgumentError ? nothing : rethrow()
+            end
+            if seed !== nothing
+                return seed,
+                SeedProvenance(:analytic, nothing, "first-order DRAG (c = 1/δ)")
+            end
+        end
+    end
+    pulse = floor(circuit, device, times, n_drives)
+    # The floor's identity: the module seam at its substrate default is :cold;
+    # an installed override — module seam or a strategy's customized
+    # initial_pulse — is :override. The :default strategy's field is bound to
+    # the seam itself, so strategy-path resolution lands here identically.
+    branch =
+        floor === default_initial_pulse &&
+        _DEFAULT_INITIAL_PULSE[] === _substrate_default_initial_pulse ? :cold : :override
+    return pulse, SeedProvenance(branch, nothing, "")
 end
 
 """
@@ -37,10 +160,12 @@ function compile_block(
     U_target = circuit_unitary(circuit)
     U_goal = EmbeddedOperator(U_target, sys)
 
-    # 3. Initial pulse via the seam (substrate: random Gaussian cold start;
-    #    Legatissimo overrides with catalog warm-starts).
+    # 3. Seed via the warm-start fallback chain (hash-exact library hit →
+    #    retarget override → analytic seed → the default_initial_pulse seam,
+    #    which is the cold floor or the private tier's installed override).
+    #    The branch that resolved is recorded in the block's provenance.
     times = collect(range(0.0, T_ns, length = N_knots))
-    pulse = default_initial_pulse(circuit, device, times, sys.n_drives)
+    pulse, seed = resolve_seed(circuit, device, qubit_indices, times, sys.n_drives)
 
     # 4. Trajectory → Problem → Solve
     qtraj = UnitaryTrajectory(sys, pulse, U_goal)
@@ -62,7 +187,7 @@ function compile_block(
     #    Legatissimo overrides with parallel multistart).
     result_pulse, fid = default_solver_strategy(qcp, qtraj; max_iter = max_iter)
 
-    return BlockResult(result_pulse, fid, n)
+    return BlockResult(result_pulse, fid, n, seed)
 end
 
 """
@@ -147,9 +272,19 @@ function _compile_block_with_strategy(
     U_target = circuit_unitary(circuit)
     U_goal = EmbeddedOperator(U_target, sys)
 
-    # 3. Initial pulse via the strategy's seam
+    # 3. Seed via the warm-start fallback chain (hash-exact library hit →
+    #    retarget override → analytic seed → the strategy's initial-pulse
+    #    seam, which is the cold floor or a customized override). The branch
+    #    that resolved is recorded in the block's provenance.
     times = collect(range(0.0, T_ns, length = N_knots))
-    pulse = strat.initial_pulse(circuit, device, times, sys.n_drives)
+    pulse, seed = resolve_seed(
+        circuit,
+        device,
+        qubit_indices,
+        times,
+        sys.n_drives;
+        floor = strat.initial_pulse,
+    )
 
     # 4. Integrator via the strategy's seam (unless caller passes one explicitly)
     qtraj = UnitaryTrajectory(sys, pulse, U_goal)
@@ -171,7 +306,7 @@ function _compile_block_with_strategy(
 
     # 6. Solve via the strategy's solver_strategy seam
     result_pulse, fid = strat.solver_strategy(qcp, qtraj; max_iter = max_iter)
-    block = BlockResult(result_pulse, fid, n)
+    block = BlockResult(result_pulse, fid, n, seed)
 
     # 7. Post-process chain
     ctx = PostProcessContext(circuit, device, qtraj, qcp)
@@ -461,5 +596,190 @@ end
         @test occursin("Multi-block compilation requires", sprint(showerror, err))
     finally
         Legato.unregister_strategy!(:two_block_test)
+    end
+end
+
+# ——— Warm-start fallback chain ———————————————————————————————————————— #
+
+# A catalog fixture: one hash-exact (or near-miss) entry for (transmon, X) on
+# HeronR3's first qubit, with a loadable pulse on the compilation grid.
+function _chain_catalog_entry(
+    device,
+    subsystem;
+    system_hash,
+    T = 40.0,
+    N = 21,
+    id = "transmon-X-v1",
+)
+    dir = mktempdir()
+    times = collect(range(0.0, T, length = N))
+    pulse =
+        ZeroOrderPulse(zeros(2, N), times; initial_value = zeros(2), final_value = zeros(2))
+    entry = Legato.CatalogEntry(
+        id,
+        "transmon",
+        "X",
+        1,
+        "curated",
+        device.name,
+        subsystem,
+        [3],
+        system_hash,
+        "ZeroOrderPulse",
+        N,
+        true,
+        T / 1000,
+        0.99,
+        Legato.VerificationRecord(0.99, "rollout: test", "2026-10-02"),
+        nothing,
+        nothing,
+        nothing,
+        "2026-10-02",
+        String[],
+        "pulses/$id/pulse.jld2",
+    )
+    entry_dir = joinpath(dir, id)
+    write_entry(entry_dir, entry)
+    JLD2.save(joinpath(entry_dir, "pulse.jld2"), "pulse", pulse)
+    return dir
+end
+
+@testitem "resolve_seed — hash-exact library hit seeds and records provenance" begin
+    using Legato
+    using JLD2
+    using Legato:
+        resolve_seed, set_default_catalog!, write_entry, compute_system_hash, SeedProvenance
+
+    device = HeronR3()
+    h = compute_system_hash(device, [1])
+    catalog = Legato._chain_catalog_entry(device, [1]; system_hash = h)
+    set_default_catalog!(catalog)
+    try
+        circuit = GateCircuit([GateOp(:X, (1,))], 1)
+        times = collect(range(0.0, 200.0, length = 21))
+        pulse, seed = resolve_seed(circuit, device, [1], times, 2)
+        @test seed.branch === :library
+        @test seed.entry_id == "transmon-X-v1"
+        @test pulse isa Legato.Piccolo.AbstractPulse
+
+        # The full pipeline carries provenance end-to-end
+        block = compile_block(circuit, device, [1]; T_ns = 40.0, N_knots = 21, max_iter = 2)
+        @test block.seed.branch === :library
+        @test block.seed.entry_id == "transmon-X-v1"
+    finally
+        set_default_catalog!(nothing)
+    end
+end
+
+@testitem "resolve_seed — retarget override on near-misses; falls to analytic when absent" begin
+    using Legato
+    using JLD2
+    using Legato:
+        resolve_seed, set_default_catalog!, set_default_retarget!, compute_system_hash
+    using Piccolo: ZeroOrderPulse
+
+    device = HeronR3()
+    # A NEAR-miss catalog: the entry exists for (transmon, X) but is solved on
+    # a different device — no hash match, so the retarget branch is the one
+    # that can pick it up.
+    other_hash = compute_system_hash(device, [1, 2])
+    catalog = Legato._chain_catalog_entry(device, [1]; system_hash = other_hash)
+    times = collect(range(0.0, 200.0, length = 21))
+    circuit = GateCircuit([GateOp(:X, (1,))], 1)
+
+    set_default_catalog!(catalog)
+    try
+        # Without the override: near-miss entries are visible but unusable →
+        # analytic (never an error)
+        _, seed = resolve_seed(circuit, device, [1], times, 2)
+        @test seed.branch === :analytic
+        @test seed.detail == "first-order DRAG (c = 1/δ)"
+
+        # With the override installed: the near-miss routes through it
+        set_default_retarget!(
+            (entry, entry_dir, dev, sub, ts) -> begin
+                return ZeroOrderPulse(
+                    zeros(2, length(ts)),
+                    ts;
+                    initial_value = zeros(2),
+                    final_value = zeros(2),
+                )
+            end,
+        )
+        try
+            _, seed = resolve_seed(circuit, device, [1], times, 2)
+            @test seed.branch === :retarget
+            @test seed.entry_id == "transmon-X-v1"
+
+            # An override that declines (returns nothing) falls through clean
+            set_default_retarget!((entry, dir, dev, sub, ts) -> nothing)
+            _, seed = resolve_seed(circuit, device, [1], times, 2)
+            @test seed.branch === :analytic
+        finally
+            set_default_retarget!(nothing)
+        end
+    finally
+        set_default_catalog!(nothing)
+    end
+end
+
+@testitem "resolve_seed — analytic for the standard set, floor otherwise" begin
+    using Legato
+    using Legato: resolve_seed, set_default_initial_pulse!
+
+    device = HeronR3()
+    times = collect(range(0.0, 200.0, length = 21))
+
+    # Single-qubit standard gates seed analytically (no catalog configured)
+    for gate in (:X, :Y, :SX, :SY)
+        circuit = GateCircuit([GateOp(gate, (1,))], 1)
+        _, seed = resolve_seed(circuit, device, [1], times, 2)
+        @test seed.branch === :analytic
+    end
+
+    # A block outside the analytic set (2 gates) goes to the floor: cold
+    circuit = GateCircuit([GateOp(:H, (1,)), GateOp(:X, (1,))], 1)
+    _, seed = resolve_seed(circuit, device, [1], times, 2)
+    @test seed.branch === :cold
+
+    # An installed seam override is the floor and provenance says so
+    set_default_initial_pulse!(
+        (c, d, ts, n) -> Legato.Piccolo.ZeroOrderPulse(
+            zeros(n, length(ts)),
+            ts;
+            initial_value = zeros(n),
+            final_value = zeros(n),
+        ),
+    )
+    try
+        _, seed = resolve_seed(circuit, device, [1], times, 2)
+        @test seed.branch === :override
+    finally
+        # restore the substrate default for the other testitems
+        Legato._DEFAULT_INITIAL_PULSE[] = Legato._substrate_default_initial_pulse
+    end
+end
+
+@testitem "compile — report carries queryable seed provenance" begin
+    using Legato
+    using Legato: compute_system_hash, set_default_catalog!, JLD2
+
+    device = HeronR3()
+    circuit = GateCircuit([GateOp(:X, (1,))], 1)
+    report = compile(circuit, device; T_ns = 200.0, N_knots = 21, max_iter = 2)
+    @test report.seed_branch === :analytic
+    @test report.seed_entry === nothing
+
+    h = compute_system_hash(device, [1])
+    catalog = Legato._chain_catalog_entry(device, [1]; system_hash = h, T = 200.0)
+    set_default_catalog!(catalog)
+    try
+        report = compile(circuit, device; T_ns = 200.0, N_knots = 21, max_iter = 2)
+        @test report.seed_branch === :library
+        @test report.seed_entry == "transmon-X-v1"
+        # rendered, not just queryable
+        @test occursin("library (transmon-X-v1)", sprint(show, report))
+    finally
+        set_default_catalog!(nothing)
     end
 end
