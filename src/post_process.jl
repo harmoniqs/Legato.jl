@@ -83,7 +83,7 @@ function plot_pulse_spectrum end
         final_value = zeros(1),
     )
     qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
-    problem = SplinePulseProblem(qtraj; Q = 100.0)
+    problem = SplinePulseProblem(qtraj; Q = 100.0, Legato._pwc_dynamics_kwargs()...)
 
     device = HeronR3()
     circuit = GateCircuit([GateOp(:H, (1,))], 1)
