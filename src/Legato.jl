@@ -191,6 +191,7 @@ export register_strategy!, unregister_strategy!, strategies, select_strategy
 export CatalogSchemaError, VerificationRecord, CatalogEntry
 export validate_entry, read_entry, write_entry
 export find_pulses, rank_entries
+export SystemHashMismatchError, compute_system_hash, validate_hash!, load_pulse
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)

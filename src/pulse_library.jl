@@ -1,6 +1,8 @@
 # The canonical pulse catalog format (schema v3). Flat TOML keys per entry;
 # a strict superset of the private tier's v2 — every pre-existing entry reads.
 using Dates
+using SHA
+using JLD2
 
 """
     CatalogSchemaError(field, reason)
@@ -301,6 +303,134 @@ function write_entry(dir::AbstractString, entry::CatalogEntry)
 end
 
 # ============================================================================
+# System-hash integrity
+# ============================================================================ #
+
+"""
+    SystemHashMismatchError(entry_hash, computed_hash)
+
+The integrity failure the whole warm-start program keys off: an entry's
+recorded system hash disagrees with the hash recomputed from the device it
+claims to have been solved against. Either the device's parameters have
+drifted since the entry was banked, or the entry misattributes its system —
+either way the entry no longer describes the physics it was optimized for.
+Refuse the warm-start or re-verify; `load_pulse(...; validate = false)` is
+the explicit retargeting escape hatch.
+"""
+struct SystemHashMismatchError <: Exception
+    entry_hash::String
+    computed_hash::String
+end
+
+function Base.showerror(io::IO, err::SystemHashMismatchError)
+    return print(
+        io,
+        "SystemHashMismatchError: entry recorded ",
+        err.entry_hash,
+        " but the device recomputes ",
+        err.computed_hash,
+        " — device drift or misattributed entry",
+    )
+end
+
+# The hash serialization: versioned, canonical, and documented. The hash
+# answers "was this pulse solved against THESE dynamics" — it covers exactly
+# the parameters that change the optimized dynamics (frequencies,
+# anharmonicities, levels, intra-subsystem couplings, drive bounds, subsystem
+# identity) and deliberately NOT the performance metadata (T1/T2, published
+# gate specs) that never enters the Hamiltonian. Subsystem order is
+# canonicalized (sorted); Float64s serialize via `repr` (round-trip exact,
+# locale-free); edges canonicalize to i < j, sorted. Non-transmon device types
+# gain hashing when they land, by adding a `_serialize_system` method.
+function _serialize_system(device::TransmonDevice, subsystem::AbstractVector{Int})
+    sorted = sort(collect(Int, subsystem))
+    sub = Set(sorted)
+    io = IOBuffer()
+    println(io, "legato-system-hash-v1")
+    println(io, device.name)
+    println(io, join(sorted, ","))
+    for i in sorted
+        q = device.qubits[i]
+        println(io, repr(q.ω), ",", repr(q.δ), ",", q.n_levels)
+    end
+    edges = [
+        (min(e.i, e.j), max(e.i, e.j), e.g) for
+        e in device.edges if e.i in sub && e.j in sub
+    ]
+    sort!(edges)
+    for (i, j, g) in edges
+        println(io, i, "-", j, ",", repr(g))
+    end
+    println(io, repr(device.drive_max))
+    return String(take!(io))
+end
+
+"""
+    compute_system_hash(device, subsystem)
+
+The `sha256:`-prefixed integrity hash for a (device, subsystem) pair — the
+value a `CatalogEntry` records in its `system_hash` field. Stable under
+recomputation and under subsystem reordering; sensitive to any change in the
+parameters that alter the optimized dynamics. Serialization is versioned (the
+version tag lives inside the hashed text), so a future format change produces
+different hashes rather than silently invalidating every entry.
+"""
+compute_system_hash(device::AbstractDevice, subsystem::AbstractVector{Int}) =
+    "sha256:" * bytes2hex(sha256(_serialize_system(device, subsystem)))
+
+"""
+    validate_hash!(entry, device, subsystem)
+
+Recompute the system hash from `device`/`subsystem` and check it against the
+entry's recorded `system_hash`. Throws `SystemHashMismatchError` (carrying
+both hashes) on drift or misattribution; throws a named schema error if the
+entry carries no hash to validate. Returns the entry on success.
+"""
+function validate_hash!(
+    entry::CatalogEntry,
+    device::AbstractDevice,
+    subsystem::AbstractVector{Int},
+)
+    entry.system_hash !== nothing || throw(
+        CatalogSchemaError(
+            "system_hash",
+            "entry carries no system hash — nothing to validate",
+        ),
+    )
+    computed = compute_system_hash(device, subsystem)
+    entry.system_hash == computed ||
+        throw(SystemHashMismatchError(entry.system_hash, computed))
+    return entry
+end
+
+"""
+    load_pulse(entry_dir; device = nothing, subsystem = nothing, validate = true)
+
+Load an entry's pulse binary (`pulse.jld2`, under the established single
+`"pulse"` key) together with its `CatalogEntry`: returns `(pulse, entry)`.
+
+**Validation-on-load is the default**: when `device` (and `subsystem`) are
+supplied, the entry's recorded hash is recomputed and checked first — a
+mismatch refuses the load. `validate = false` is the explicit opt-out for
+deliberate cross-device transfer (retargeting) workflows. Without a device
+there is nothing to validate against; the pulse loads unverified.
+"""
+function load_pulse(
+    entry_dir::AbstractString;
+    device = nothing,
+    subsystem = nothing,
+    validate::Bool = true,
+)
+    entry = read_entry(entry_dir)
+    if device !== nothing
+        subsystem !== nothing || throw(ArgumentError("device given without subsystem"))
+        validate && validate_hash!(entry, device, subsystem)
+    end
+    pulse = JLD2.load(joinpath(entry_dir, "pulse.jld2"))["pulse"]
+    return pulse, entry
+end
+
+# ============================================================================
 # Query & ranking
 # ============================================================================ #
 
@@ -433,6 +563,15 @@ _v3_full_entry() = CatalogEntry(
     "2026-10-01",
     ["transmon", "gate/X"],
     "pulses/transmon-X-v1/pulse.jld2",
+)
+
+# Rebuild a v3 entry with one field replaced (test scaffolding).
+_break(key, value) = CatalogEntry(
+    ntuple(
+        i ->
+            fieldnames(CatalogEntry)[i] === key ? value : getfield(_v3_full_entry(), i),
+        fieldcount(CatalogEntry),
+    )...,
 )
 
 # ============================================================================
@@ -893,5 +1032,186 @@ end
         end
         hits = find_pulses(dir; platform = "transmon", gate = "X")
         @test [e.id for e in hits] == [good.id]
+    end
+end
+
+# A minimal generic transmon device for hashing tests (the generic builder
+# path, not a published profile).
+_test_device(;
+    ωs = [4.0, 4.1],
+    δs = [-0.2, -0.22],
+    levels = [3, 3],
+    g = 0.003,
+    drive_max = 0.05,
+) = TransmonDevice(
+    "generic-hash-test",
+    TransmonQubit.(ωs, δs, levels),
+    [CouplingEdge(1, 2, g)],
+    Dict{Symbol,GateSpec}(),
+    drive_max,
+    fill(68.0, 2),
+    fill(80.0, 2),
+)
+
+@testitem "compute_system_hash — stable, sensitive, canonical" begin
+    using Legato
+    using Legato: compute_system_hash, GateSpec
+
+    # Stability: recomputation does not move the hash
+    d = Legato._test_device()
+    @test compute_system_hash(d, [1, 2]) == compute_system_hash(d, [1, 2])
+
+    # Subsystem reordering canonicalizes to the same set
+    @test compute_system_hash(d, [1, 2]) == compute_system_hash(d, [2, 1])
+
+    # Subsystem identity matters
+    @test compute_system_hash(d, [1, 2]) != compute_system_hash(d, [1])
+
+    # Sensitivity: every dynamics-relevant parameter perturbation moves the hash
+    for perturbed in (
+        Legato._test_device(ωs = [4.0, 4.100000001]),   # a frequency
+        Legato._test_device(δs = [-0.2, -0.220000001]), # an anharmonicity
+        Legato._test_device(levels = [3, 4]),           # a level count
+        Legato._test_device(g = 0.003000001),          # a coupling
+        Legato._test_device(drive_max = 0.050000001),   # the drive bound
+    )
+        @test compute_system_hash(perturbed, [1, 2]) != compute_system_hash(d, [1, 2])
+    end
+
+    # Deliberately EXCLUDED from the hash: performance metadata that never
+    # enters the Hamiltonian (T1/T2, published gate specs).
+    same_dynamics = TransmonDevice(
+        d.name,
+        d.qubits,
+        d.edges,
+        Dict(:X => GateSpec(20.0, 1e-4)), # native_gates added
+        d.drive_max,
+        fill(999.0, 2),                   # T1 changed
+        fill(999.0, 2),                   # T2 changed
+    )
+    @test compute_system_hash(same_dynamics, [1, 2]) == compute_system_hash(d, [1, 2])
+
+    # Versioned: the serialization tag lives inside the hashed text
+    @test startswith(compute_system_hash(d, [1, 2]), "sha256:")
+end
+
+@testitem "compute_system_hash — covers profiles and the generic builder" begin
+    using Legato
+    using Legato: compute_system_hash
+
+    hashes = [
+        compute_system_hash(HeronR3(), [1, 2]),
+        compute_system_hash(HeronR2(), [1, 2]),
+        compute_system_hash(IQMEmerald(), [1, 2]),
+        compute_system_hash(Legato._test_device(), [1, 2]),
+    ]
+    # Distinct devices hash distinctly; every hash is well-formed
+    @test length(unique(hashes)) == 4
+    @test all(startswith.(hashes, "sha256:"))
+end
+
+@testitem "validate_hash! — drift and misattribution are named, both hashes carried" begin
+    using Legato
+    using Legato:
+        CatalogSchemaError, SystemHashMismatchError, compute_system_hash, validate_hash!
+
+    d = Legato._test_device()
+    h = compute_system_hash(d, [1, 2])
+
+    # A no-hash entry cannot be validated — named schema error
+    no_hash = Legato._break(:system_hash, nothing)
+    err = try
+        validate_hash!(no_hash, d, [1, 2])
+        nothing
+    catch e
+        e
+    end
+    @test err isa CatalogSchemaError
+    @test err.field == "system_hash"
+
+    # A hash-bearing entry validates clean on its own device
+    entry = Legato._break(:system_hash, h)
+    @test validate_hash!(entry, d, [1, 2]) == entry
+
+    # Device drift → mismatch error carrying BOTH hashes
+    drifted = Legato._test_device(ωs = [4.0, 4.11])
+    err = try
+        validate_hash!(entry, drifted, [1, 2])
+        nothing
+    catch e
+        e
+    end
+    @test err isa SystemHashMismatchError
+    @test err.entry_hash == h
+    @test err.computed_hash == compute_system_hash(drifted, [1, 2])
+    @test occursin(h, sprint(showerror, err))
+    @test occursin(err.computed_hash, sprint(showerror, err))
+end
+
+@testitem "load_pulse — validation-on-load default, explicit retargeting opt-out" begin
+    using Legato
+    using JLD2
+    using Legato: SystemHashMismatchError, compute_system_hash, write_entry, load_pulse
+    using Piccolo: ZeroOrderPulse
+
+    d = Legato._test_device()
+    h = compute_system_hash(d, [1, 2])
+    times = collect(range(0.0, 10.0, length = 5))
+    pulse =
+        ZeroOrderPulse(zeros(2, 5), times; initial_value = zeros(2), final_value = zeros(2))
+
+    mktempdir() do dir
+        entry_dir = joinpath(dir, "transmon-X-hash-v1")
+        entry = Legato.CatalogEntry(
+            "transmon-X-hash-v1",
+            "transmon",
+            "X",
+            1,
+            "curated",
+            "generic-hash-test",
+            [1, 2],
+            [3, 3],
+            h,
+            "ZeroOrderPulse",
+            5,
+            true,
+            0.01,
+            0.99,
+            Legato.VerificationRecord(0.99, "rollout: test", "2026-10-02"),
+            nothing,
+            nothing,
+            nothing,
+            "2026-10-02",
+            String[],
+            "pulses/transmon-X-hash-v1/pulse.jld2",
+        )
+        write_entry(entry_dir, entry)
+        JLD2.save(joinpath(entry_dir, "pulse.jld2"), "pulse", pulse)
+
+        # Validation-on-load (default): matching device loads clean
+        loaded, meta = load_pulse(entry_dir; device = d, subsystem = [1, 2])
+        @test loaded isa ZeroOrderPulse
+        @test meta.id == "transmon-X-hash-v1"
+
+        # Drifted device → refusal by default
+        drifted = Legato._test_device(ωs = [4.0, 4.11])
+        err = try
+            load_pulse(entry_dir; device = drifted, subsystem = [1, 2])
+            nothing
+        catch e
+            e
+        end
+        @test err isa SystemHashMismatchError
+
+        # The explicit retargeting opt-out loads anyway
+        retargeted, _ =
+            load_pulse(entry_dir; device = drifted, subsystem = [1, 2], validate = false)
+        @test retargeted isa ZeroOrderPulse
+
+        # Without a device, loading is unverified but works (integrity is the
+        # caller's contract to request)
+        bare, meta2 = load_pulse(entry_dir)
+        @test bare isa ZeroOrderPulse
+        @test meta2.id == meta.id
     end
 end
