@@ -164,6 +164,7 @@ include("partitioning.jl")
 include("library.jl")
 include("classify.jl")
 include("build_problem.jl")
+include("pulse_library.jl")
 include("post_process.jl")
 include("strategy.jl")
 include("compile.jl")
@@ -187,6 +188,8 @@ export pulse_spectrum, plot_pulse_spectrum
 export build_problem, set_build_problem!
 export CompilationStrategy
 export register_strategy!, unregister_strategy!, strategies, select_strategy
+export CatalogSchemaError, VerificationRecord, CatalogEntry
+export validate_entry, read_entry, write_entry
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
