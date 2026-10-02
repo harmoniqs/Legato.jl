@@ -190,6 +190,7 @@ export CompilationStrategy
 export register_strategy!, unregister_strategy!, strategies, select_strategy
 export CatalogSchemaError, VerificationRecord, CatalogEntry
 export validate_entry, read_entry, write_entry
+export find_pulses, rank_entries
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
