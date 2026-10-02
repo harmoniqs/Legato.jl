@@ -301,8 +301,115 @@ function write_entry(dir::AbstractString, entry::CatalogEntry)
 end
 
 # ============================================================================
-# Tests
+# Query & ranking
 # ============================================================================ #
+
+"""
+    rank_entries(entries; system_hash = nothing)
+
+The **total ranking order** over catalog entries — the public contract every
+consumer (the warm-start chain, the CLI, the private tier) shares, so none can
+diverge. Descending by, in order:
+
+1. **hash-exactness** — entries whose `system_hash` equals the query's come
+   first (only when a query hash is given);
+2. **verification** — verified entries rank strictly above unverified ones;
+3. **fidelity** — recorded fidelity descending *within* the same
+   hash/verification group;
+4. ties break by shorter `duration_us`, then newer `date`, then id — the
+   ordering is total, never unspecified.
+
+The verified-above-unverified rule holds **at any recorded fidelity**: an
+optimizer claiming 0.9999 never outranks a rollout-verified 0.999 — trust
+ordering beats number envy.
+"""
+function rank_entries(entries::AbstractVector{CatalogEntry}; system_hash = nothing)
+    # Tuple sort, rev: hash_exact desc, verified desc, fidelity desc,
+    # duration asc (-duration under rev), date desc, id deterministic.
+    return sort(
+        entries;
+        by = e -> (
+            system_hash !== nothing && e.system_hash == system_hash,
+            e.verification !== nothing,
+            e.fidelity,
+            -e.duration_us,
+            e.date,
+            e.id,
+        ),
+        rev = true,
+    )
+end
+
+# Default results show one entry per line (platform, gate, device_id) **per
+# trust class**: the verified incumbent chain keeps its max version, and the
+# unverified candidate chain keeps its max version — both surface, and the
+# ranking puts the incumbent above the candidate. Superseding by raw version
+# across trust classes would let an unverified v3 hide a verified v2 incumbent,
+# which is exactly what the verified-above-unverified rule forbids. Versioning
+# is append-only, so supersession is a filter, never a mutation.
+function _drop_superseded(entries::Vector{CatalogEntry})
+    latest = Dict{Tuple{String,String,Union{String,Nothing},Bool},CatalogEntry}()
+    for e in entries
+        key = (e.platform, e.gate, e.device_id, e.verification !== nothing)
+        if !haskey(latest, key) || e.version > latest[key].version
+            latest[key] = e
+        end
+    end
+    return collect(values(latest))
+end
+
+"""
+    find_pulses(entries_dir; platform, gate, device_id, system_hash, exact_hash_only, include_superseded)
+
+Scan a catalog partition (a directory of entry directories) for matching
+entries, ranked by [`rank_entries`](@ref).
+
+- `platform`, `gate`, `device_id` are exact-match filters (`nothing` = no
+  filter); `device_id` matching narrows to one device's entries.
+- `system_hash` does **not** filter by default — it *ranks*: hash-exact
+  entries come first, the rest remain as fallbacks (the warm-start chain's
+  resolution order). `exact_hash_only = true` makes it a strict filter.
+- Superseded versions never appear in default results; `include_superseded = true`
+  surfaces them. Supersession is per **trust class**: within one
+  platform/gate/device line, the verified incumbent chain keeps its latest
+  version and the unverified candidate chain keeps its latest — an unverified
+  v3 can never hide a verified v2 incumbent from default results.
+- An empty or missing directory returns an empty vector, never an error —
+  callers fall through the warm-start chain on absence, not on exception.
+- A malformed entry is skipped with a warning naming its path; one bad entry
+  never poisons a catalog query.
+"""
+function find_pulses(
+    entries_dir::AbstractString;
+    platform = nothing,
+    gate = nothing,
+    device_id = nothing,
+    system_hash = nothing,
+    exact_hash_only::Bool = false,
+    include_superseded::Bool = false,
+)
+    isdir(entries_dir) || return CatalogEntry[]
+    entries = CatalogEntry[]
+    for path in readdir(entries_dir; join = true)
+        isdir(path) || continue
+        isfile(joinpath(path, "metadata.toml")) || continue
+        entry = try
+            read_entry(path)
+        catch err
+            err isa CatalogSchemaError || rethrow()
+            @warn "skipping malformed catalog entry" path error = err
+            continue
+        end
+        (platform === nothing || entry.platform == platform) || continue
+        (gate === nothing || entry.gate == gate) || continue
+        (device_id === nothing || entry.device_id == device_id) || continue
+        (system_hash === nothing || !exact_hash_only || entry.system_hash == system_hash) ||
+            continue
+        push!(entries, entry)
+    end
+    entries = include_superseded ? entries : _drop_superseded(entries)
+    return rank_entries(entries; system_hash = system_hash)
+end
 
 _v3_full_entry() = CatalogEntry(
     "transmon-X-v1",
@@ -327,6 +434,10 @@ _v3_full_entry() = CatalogEntry(
     ["transmon", "gate/X"],
     "pulses/transmon-X-v1/pulse.jld2",
 )
+
+# ============================================================================
+# Tests
+# ============================================================================ #
 
 @testitem "CatalogEntry — v3 round-trips losslessly" begin
     using Legato
@@ -524,5 +635,263 @@ end
         end
         @test err isa CatalogSchemaError
         @test err.field == "verification"
+    end
+end
+
+@testitem "find_pulses — deterministic ranking over a scenario catalog" begin
+    using Legato
+    using Legato: CatalogEntry, VerificationRecord, find_pulses, rank_entries, write_entry
+
+    # Entry factory: one line (transmon, X, generic-2q), varying version,
+    # fidelity, verification, hash.
+    make(
+        id,
+        version,
+        fidelity;
+        verification = nothing,
+        system_hash = nothing,
+        duration = 0.04,
+        date = "2026-10-01",
+    ) = CatalogEntry(
+        id,
+        "transmon",
+        "X",
+        version,
+        "bundled",
+        "generic-2q",
+        [1],
+        [3],
+        system_hash,
+        "CubicSplinePulse",
+        11,
+        true,
+        duration,
+        fidelity,
+        verification,
+        nothing,
+        nothing,
+        nothing,
+        date,
+        String[],
+        "pulses/$id/pulse.jld2",
+    )
+    verified(f) = VerificationRecord(f, "rollout: piccolo-2.1.0", "2026-10-01")
+
+    # The scenario: a superseded verified v1, a hash-exact verified v2
+    # incumbent, and a higher-fidelity but UNVERIFIED v3 — trust ordering
+    # must beat number envy.
+    scenario = [
+        make("transmon-X-v1", 1, 0.90; verification = verified(0.90)),
+        make(
+            "transmon-X-v2",
+            2,
+            0.95;
+            verification = verified(0.95),
+            system_hash = "sha256:AAA",
+        ),
+        make("transmon-X-v3", 3, 0.9999),
+        # Different gate, same platform — must not surface under gate=X
+        CatalogEntry(
+            "transmon-Y-v1",
+            "transmon",
+            "Y",
+            1,
+            "bundled",
+            "generic-2q",
+            [1],
+            [3],
+            nothing,
+            "CubicSplinePulse",
+            11,
+            true,
+            0.04,
+            0.9,
+            verified(0.9),
+            nothing,
+            nothing,
+            nothing,
+            "2026-10-01",
+            String[],
+            "pulses/transmon-Y-v1/pulse.jld2",
+        ),
+        # Different device — must not surface under device_id="other-dev"
+        CatalogEntry(
+            "transmon-X-other-v1",
+            "transmon",
+            "X",
+            1,
+            "bundled",
+            "other-dev",
+            [1],
+            [3],
+            nothing,
+            "CubicSplinePulse",
+            11,
+            true,
+            0.04,
+            0.9,
+            nothing,
+            nothing,
+            nothing,
+            nothing,
+            "2026-10-01",
+            String[],
+            "pulses/transmon-X-other-v1/pulse.jld2",
+        ),
+        # Different platform entirely
+        CatalogEntry(
+            "fluxonium-X-v1",
+            "fluxonium",
+            "X",
+            1,
+            "bundled",
+            "generic-fl",
+            [1],
+            [5],
+            nothing,
+            "LinearSplinePulse",
+            51,
+            false,
+            0.0255,
+            0.9999,
+            verified(0.9999),
+            nothing,
+            nothing,
+            nothing,
+            "2026-10-01",
+            String[],
+            "pulses/fluxonium-X-v1/pulse.jld2",
+        ),
+    ]
+    mktempdir() do dir
+        for e in scenario
+            write_entry(joinpath(dir, e.id), e)
+        end
+
+        # platform+gate query with the query hash = the v2 incumbent's hash:
+        # hash-exact verified v2 first, then unverified entries by recorded
+        # fidelity (v3's higher claim notwithstanding). No device filter, so
+        # the other-device candidate surfaces after v3; superseded v1 absent.
+        hits =
+            find_pulses(dir; platform = "transmon", gate = "X", system_hash = "sha256:AAA")
+        @test [e.id for e in hits] == ["transmon-X-v2", "transmon-X-v3", "transmon-X-other-v1"]
+
+        # include_superseded surfaces v1 — and verified v1 (0.90) ranks above
+        # unverified v3 (0.9999) under the trust rule
+        all_x = find_pulses(
+            dir;
+            platform = "transmon",
+            gate = "X",
+            system_hash = "sha256:AAA",
+            include_superseded = true,
+        )
+        @test [e.id for e in all_x] == ["transmon-X-v2", "transmon-X-v1", "transmon-X-v3", "transmon-X-other-v1"]
+
+        # Without a query hash, verified v2 still outranks unverified v3
+        no_hash = find_pulses(dir; platform = "transmon", gate = "X")
+        @test [e.id for e in no_hash] == ["transmon-X-v2", "transmon-X-v3", "transmon-X-other-v1"]
+
+        # exact_hash_only narrows to the hash match alone
+        strict = find_pulses(
+            dir;
+            platform = "transmon",
+            gate = "X",
+            system_hash = "sha256:AAA",
+            exact_hash_only = true,
+        )
+        @test [e.id for e in strict] == ["transmon-X-v2"]
+
+        # device_id filter excludes the other-device entry
+        own = find_pulses(dir; platform = "transmon", gate = "X", device_id = "generic-2q")
+        @test "transmon-X-other-v1" ∉ [e.id for e in own]
+
+        # Empty library (and missing directory): empty result, never an error
+        @test find_pulses(joinpath(dir, "nonexistent")) == CatalogEntry[]
+    end
+end
+
+@testitem "rank_entries — total order: duration, date, id tie-breaks" begin
+    using Legato
+    using Legato: CatalogEntry, VerificationRecord, rank_entries
+
+    make(id, fidelity, duration, date) = CatalogEntry(
+        id,
+        "transmon",
+        "X",
+        1,
+        "bundled",
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        "CubicSplinePulse",
+        11,
+        true,
+        duration,
+        fidelity,
+        VerificationRecord(fidelity, "rollout", date),
+        nothing,
+        nothing,
+        nothing,
+        date,
+        String[],
+        "pulses/$id/pulse.jld2",
+    )
+
+    # Same fidelity: shorter duration first
+    a = make("transmon-X-a", 0.99, 0.030, "2026-09-01")
+    b = make("transmon-X-b", 0.99, 0.040, "2026-09-02")
+    @test [e.id for e in rank_entries([b, a])] == ["transmon-X-a", "transmon-X-b"]
+
+    # Same fidelity and duration: newer date first
+    c = make("transmon-X-c", 0.99, 0.030, "2026-10-01")
+    @test [e.id for e in rank_entries([a, c])] == ["transmon-X-c", "transmon-X-a"]
+
+    # Fully tied apart from id: still total (id-terminated)
+    d = make("transmon-X-d", 0.99, 0.030, "2026-10-01")
+    @test length(rank_entries([c, d])) == 2  # deterministic, no throw
+
+    # Verified strictly above unverified at ANY recorded fidelity
+    unverified = CatalogEntry(
+        "transmon-X-hi",
+        "transmon",
+        "X",
+        1,
+        "bundled",
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        "CubicSplinePulse",
+        11,
+        true,
+        0.04,
+        0.99999,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        "2026-10-02",
+        String[],
+        "pulses/h/pulse.jld2",
+    )
+    @test [e.id for e in rank_entries([unverified, c])] == ["transmon-X-c", "transmon-X-hi"]
+end
+
+@testitem "find_pulses — malformed entry is skipped, not fatal" begin
+    using Legato
+    using TOML
+    using Legato: find_pulses, write_entry
+
+    mktempdir() do dir
+        good = Legato._v3_full_entry()
+        write_entry(joinpath(dir, good.id), good)
+        # A malformed sibling: identity missing entirely
+        mkpath(joinpath(dir, "bad-entry"))
+        open(joinpath(dir, "bad-entry", "metadata.toml"), "w") do io
+            return TOML.print(io, Dict{String,Any}("platform" => "transmon"))
+        end
+        hits = find_pulses(dir; platform = "transmon", gate = "X")
+        @test [e.id for e in hits] == [good.id]
     end
 end
