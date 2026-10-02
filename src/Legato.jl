@@ -165,6 +165,7 @@ include("library.jl")
 include("classify.jl")
 include("build_problem.jl")
 include("pulse_library.jl")
+include("analytic_seeds.jl")
 include("post_process.jl")
 include("strategy.jl")
 include("compile.jl")
@@ -192,6 +193,7 @@ export CatalogSchemaError, VerificationRecord, CatalogEntry
 export validate_entry, read_entry, write_entry
 export find_pulses, rank_entries
 export SystemHashMismatchError, compute_system_hash, validate_hash!, load_pulse
+export rectangular_seed, drag_seed
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
