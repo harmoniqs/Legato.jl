@@ -75,6 +75,11 @@ struct CompilationReport
     pulse_fidelity::Float64
     pulse_duration_ns::Float64
     pulse_error::Float64
+
+    # Seed provenance (queryable — which fallback-chain branch resolved and
+    # which catalog entry, if any, seeded the block)
+    seed_branch::Symbol
+    seed_entry::Union{String,Nothing}
 end
 
 function CompilationReport(
@@ -94,6 +99,8 @@ function CompilationReport(
         block.fidelity,
         duration(block.pulse),
         1.0 - block.fidelity,
+        block.seed.branch,
+        block.seed.entry_id,
     )
 end
 
@@ -120,6 +127,9 @@ function Base.show(io::IO, r::CompilationReport)
         err_ratio
     )
     @printf(io, "Gates                  %3d        — (1 pulse)\n", r.gate_n_gates)
+    seed_note =
+        r.seed_entry === nothing ? "$(r.seed_branch)" : "$(r.seed_branch) ($(r.seed_entry))"
+    println(io, "Seed: ", seed_note)
     println(io, "─" ^ 58)
 end
 
@@ -225,6 +235,8 @@ end
         0.95,                       # pulse_fidelity
         200.0,                      # pulse_duration_ns
         0.05,                       # pulse_error
+        :library,                   # seed_branch
+        "transmon-X-v1",            # seed_entry
     )
 
     buf = IOBuffer()

@@ -71,6 +71,40 @@ plug in custom integrators without editing Legato source.
 """
 set_default_integrator!(builder) = (_DEFAULT_INTEGRATOR[] = builder; builder)
 
+# Warm-start chain configuration (additions — the four substrate seams above
+# are untouched). The catalog is a catalog partition directory (entry dirs);
+# nothing by default, which makes the chain's library/retarget branches no-ops
+# and preserves pre-chain behavior exactly.
+const _DEFAULT_CATALOG = Ref{Union{String,Nothing}}(nothing)
+
+"""
+    set_default_catalog!(dir)
+
+Point the warm-start fallback chain at a catalog partition (a directory of
+entry directories, as scanned by `find_pulses`). `nothing` disables the
+library and retarget branches. Hash-exact entries load with
+validation-on-load; a hash mismatch refuses the warm-start (drift is a
+finding, not a fallback).
+"""
+set_default_catalog!(dir::Union{Nothing,AbstractString}) =
+    (_DEFAULT_CATALOG[] = dir === nothing ? nothing : String(dir))
+
+const _DEFAULT_RETARGET = Ref{Union{Function,Nothing}}(nothing)
+
+"""
+    set_default_retarget!(f)
+
+Install the retarget override — the private tier's plug point for
+cross-device transfer. `f` must have signature
+
+`(entry, entry_dir, device, qubit_indices, times) -> Union{AbstractPulse, Nothing}`
+
+and is applied to the best near-miss catalog entry (platform+gate match, no
+hash-exact match). Returning `nothing` declines the retarget and the chain
+falls through to analytic — never an error. `nothing` uninstalls.
+"""
+set_default_retarget!(f::Union{Nothing,Function}) = (_DEFAULT_RETARGET[] = f)
+
 # Substrate dynamics are knot-only (PWC): the optimizer drives knot values,
 # never a spline's derivative coefficients. Piccolo ≥ 2 requires that contract
 # to be stated explicitly (`integrator_type = :pwc`) — composing a
@@ -194,6 +228,8 @@ export validate_entry, read_entry, write_entry
 export find_pulses, rank_entries
 export SystemHashMismatchError, compute_system_hash, validate_hash!, load_pulse
 export rectangular_seed, drag_seed
+export SeedProvenance, resolve_seed
+export set_default_catalog!, set_default_retarget!
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
