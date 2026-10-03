@@ -445,6 +445,54 @@ partner-device parameters never enter the public repository.
 """
 bundled_catalog() = joinpath(pkgdir(Legato), "data", "pulses")
 
+"""
+    rollout_pwc(pulse, sys)
+
+Exact rollout of a piecewise-constant pulse against a Piccolo system's own
+assembled generators (`sys.H_drift`, `sys.H_drives`): the ordered product of
+per-knot matrix exponentials — the PWC dynamics **exactly**, with no solver
+and no optimizer in the loop. This is the verification primitive the
+bank's promises are measured with (build-time bundle verification, the
+seed-efficacy contract tests, and the benchmark surface all share it).
+"""
+function rollout_pwc(pulse, sys)
+    H_drift = Matrix(sys.H_drift)
+    H_drives = [Matrix(drive.H) for drive in sys.H_drives]
+    t = pulse.controls.t
+    u = pulse.controls.u
+    U = Matrix{ComplexF64}(I, sys.levels, sys.levels)
+    for k = 1:(length(t)-1)
+        H = H_drift
+        for d = 1:size(u, 1)
+            H += u[d, k] * H_drives[d]
+        end
+        U = exp(-im * H * (t[k+1] - t[k])) * U
+    end
+    return U
+end
+
+"""
+    freephase_gate_fidelity(U, target; subsystem_levels = 2)
+
+Free-phase average gate fidelity between a rolled-out unitary and a 2D
+computational-subspace target, **side-agnostic**: it absorbs a virtual-Z on
+either side of the target — the equivalence class frame updates allow,
+`U ~ Rz(a)·V·Rz(b)` — because an optimizer's free-phase representative may
+carry its phase on either side (Piccolo's objective absorbs the left one).
+
+The inner phase has a closed form; the outer is a deterministic 1D grid
+maximization, so the number is reproducible to grid resolution (~1e-6) on
+any machine.
+"""
+function freephase_gate_fidelity(U, target; subsystem_levels::Int = 2)
+    V = target[1:subsystem_levels, 1:subsystem_levels] |> Matrix{ComplexF64}
+    Us = U[1:subsystem_levels, 1:subsystem_levels]
+    M = V' * Us
+    g(γ) = abs(M[1, 1] + M[1, 2] * exp(im * γ)) + abs(M[2, 1] + M[2, 2] * exp(im * γ))
+    best = maximum(g(γ) for γ in range(0, 2π; length = 1441)[1:(end-1)])
+    return best^2 / 6 + 1 / 3
+end
+
 # ============================================================================
 # Query & ranking
 # ============================================================================ #
@@ -1335,4 +1383,112 @@ end
         @test pulse isa Legato.Piccolo.AbstractPulse
         @test entry.verification.rollout_fidelity ≥ 0.9999
     end
+end
+
+# ——— Seed-efficacy contract tests (the warm-start flywheel's central claims) ——— #
+
+# The allowlisted generic device, reconstructed from the allowlist itself, and
+# its system — the fixture the seed-efficacy surface runs against.
+_efficacy_device() = begin
+    allowlist = TOML.parsefile(joinpath(bundled_catalog(), "allowlist.toml"))
+    p = only(allowlist["profile"])
+    return TransmonDevice(
+        p["name"],
+        TransmonQubit.(p["omega"], p["delta"], p["levels"]),
+        [CouplingEdge(c...) for c in p["couplings"]],
+        Dict{Symbol,Legato.GateSpec}(),
+        p["drive_max"],
+        [1.0],
+        [1.0],
+    )
+end
+
+@testitem "seed efficacy — the bank keeps its promise" begin
+    using Legato
+    using TOML
+    using Legato: bundled_catalog, load_pulse, rollout_pwc, freephase_gate_fidelity
+
+    device = Legato._efficacy_device()
+    sys = Legato.Piccolo.MultiTransmonSystem(device, [1])
+
+    # Every solved bundled entry, loaded as an initial guess and rolled out
+    # against its recorded device, achieves its RECORDED fidelity within the
+    # documented tolerance (1e-6: exact-PWC rollout is deterministic to
+    # floating-point; the recorded number came from the same primitive).
+    # This is the bank's integrity promise — no optimization runs here.
+    for gate in (:X, :Y, :SX, :H)
+        pulse, entry = load_pulse(
+            joinpath(bundled_catalog(), "transmon-$gate-generic-v1");
+            device = device,
+            subsystem = [1],
+        )
+        target = circuit_unitary(GateCircuit([GateOp(gate, (1,))], 1))
+        F = freephase_gate_fidelity(rollout_pwc(pulse, sys), target)
+        recorded = entry.verification.rollout_fidelity
+        @test F ≥ recorded - 1e-6
+        @test recorded ≥ 0.9999  # the quality bar rides the promise
+    end
+
+    # Analytic entries carry no promise — their empty verification record is
+    # the no-claim, and it is covered by the bundle tests.
+end
+
+@testitem "seed efficacy — chain branches produce distinct, labeled guesses" begin
+    using Legato
+    using Legato: bundled_catalog, set_default_catalog!, resolve_seed, drag_seed
+
+    device = Legato._efficacy_device()
+    times = collect(range(0.0, 200.0, length = 21))
+    circuit_x = GateCircuit([GateOp(:X, (1,))], 1)
+    circuit_multi = GateCircuit([GateOp(:H, (1,)), GateOp(:X, (1,))], 1)
+
+    # Branch labels, on one canonical instance each
+    cold_pulse, cold_seed = resolve_seed(circuit_multi, device, [1], times, 2)
+    @test cold_seed.branch === :cold
+
+    analytic_pulse, analytic_seed = resolve_seed(circuit_x, device, [1], times, 2)
+    @test analytic_seed.branch === :analytic
+
+    set_default_catalog!(bundled_catalog())
+    try
+        library_pulse, library_seed = resolve_seed(circuit_x, device, [1], times, 2)
+        @test library_seed.branch === :library
+        @test library_seed.entry_id == "transmon-X-generic-v1"
+
+        # Distinct guesses: the three branches hand the optimizer different
+        # physics — a random floor, a DRAG seed, and a solved bank pulse.
+        u(a, b) = a.controls.u != b.controls.u
+        @test u(cold_pulse, analytic_pulse)
+        @test u(cold_pulse, library_pulse)
+        @test u(analytic_pulse, library_pulse)
+    finally
+        set_default_catalog!(nothing)
+    end
+end
+
+@testitem "seed efficacy — seeded start beats cold at the canonical instance" begin
+    using Legato
+    using Random
+    using Legato: rollout_pwc, freephase_gate_fidelity, drag_seed
+
+    device = Legato._efficacy_device()
+    sys = Legato.Piccolo.MultiTransmonSystem(device, [1])
+    circuit = GateCircuit([GateOp(:X, (1,))], 1)
+    target = circuit_unitary(circuit)
+    times = collect(range(0.0, 200.0, length = 21))
+
+    # Deterministic cold draw: the substrate's random Gaussian floor
+    Random.seed!(20261003)
+    cold = Legato._substrate_default_initial_pulse(circuit, device, times, 2)
+    analytic = drag_seed(:X, times[end], length(times), device.drive_max, 0.2)
+
+    F_cold = freephase_gate_fidelity(rollout_pwc(cold, sys), target)
+    F_analytic = freephase_gate_fidelity(rollout_pwc(analytic, sys), target)
+
+    # Direction contract with a generous margin: the analytic seed starts
+    # within reach of the target (≥0.999) while a random cold draw is a
+    # random unitary — typically far off. Margin 0.05 cannot flip on any
+    # reasonable refactor of either construction.
+    @test F_analytic ≥ 0.999
+    @test F_analytic > F_cold + 0.05
 end
