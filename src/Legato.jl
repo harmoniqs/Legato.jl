@@ -231,6 +231,7 @@ export rectangular_seed, drag_seed
 export SeedProvenance, resolve_seed
 export set_default_catalog!, set_default_retarget!
 export bundled_catalog
+export rollout_pwc, freephase_gate_fidelity
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
