@@ -1,0 +1,20 @@
+# Device parameterizations cleared for PUBLIC bundling.
+#
+# THE IP RULE, mechanically enforced: every bundled entry's system_hash must
+# match the hash of one of the profiles below. Partner- or chip-specific
+# device parameters are NEVER added to this file — a pulse solved against
+# them lives in the private tier's vault catalog, not in this public bundle.
+# Adding a profile is a deliberate, human-reviewed PR action.
+#
+# Hash coverage (compute_system_hash): device name, per-qubit ω/δ/levels,
+# intra-subsystem couplings, drive bound. T1/T2 and published gate specs are
+# hash-excluded (performance metadata never enters the Hamiltonian).
+
+[[profile]]
+name = "generic-transmon-1q"
+provenance = "The generic transmon parameterization (ω = 4.0 GHz, δ = 0.2 GHz, 3 levels, drive_max = 0.05 GHz) used across Harmoniqs' public demo repos and the published single-qubit baseline campaigns."
+omega = [4.0]
+delta = [0.2]
+levels = [3]
+couplings = []
+drive_max = 0.05

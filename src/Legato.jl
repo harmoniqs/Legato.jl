@@ -230,6 +230,7 @@ export SystemHashMismatchError, compute_system_hash, validate_hash!, load_pulse
 export rectangular_seed, drag_seed
 export SeedProvenance, resolve_seed
 export set_default_catalog!, set_default_retarget!
+export bundled_catalog
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
