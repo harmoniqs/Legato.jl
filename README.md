@@ -136,6 +136,19 @@ Legato is a substrate that runs *productively on small problems* with no proprie
 
 Legato users get a working substrate. Harmoniqs collaborators and NDA partners get the competitive layer.
 
+## Pulse library
+
+Legato bundles a reference library of verified pulses (`data/pulses/`) — the public tier of the catalog format this package defines:
+
+- **Solved + verified entries** — the transmon single-qubit gate set (X, Y, √X, H) on generic device parameters. Each carries a **verification record**: an independently re-rolled, free-phase-aware fidelity (never the optimizer's claim), the verifier's identity, and the date. The query API ranks verified entries strictly above unverified ones at any recorded fidelity.
+- **Analytic seed entries** (tagged `analytic-seed`) — first-order DRAG seeds with **no fidelity claim**: seeds are initial guesses, and the empty verification record is the distinction.
+
+The bundle is a standard catalog partition: `bundled_catalog()` returns it, `find_pulses(bundled_catalog(); ...)` queries it, and the warm-start fallback chain consumes it with hash-validated loading via `set_default_catalog!(bundled_catalog())`.
+
+**The IP rule** is lint-enforced: every entry's device parameters must match a profile in `data/pulses/allowlist.toml` (generic or published parameterizations only) — partner-device parameters never enter the public repository.
+
+To rebuild from source: `julia --project=. scripts/seed_bundle.jl` — it solves, independently re-verifies every pulse at build time, and refuses to bank anything below the quality bar.
+
 ## Installation
 
 ```julia

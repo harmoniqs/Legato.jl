@@ -430,6 +430,21 @@ function load_pulse(
     return pulse, entry
 end
 
+"""
+    bundled_catalog()
+
+The bundled reference library: the catalog partition shipped in this
+repository (`data/pulses/` — solved + verified single-qubit gate pulses on
+generic allowlisted devices, plus analytic seed entries). It is a standard
+catalog partition: `find_pulses(bundled_catalog(); ...)` and the warm-start
+chain's `:library` branch consume it directly via `set_default_catalog!`.
+
+The bundle obeys the IP rule: every entry's device parameters match the
+profiles in `data/pulses/allowlist.toml` (enforced by a lint test) —
+partner-device parameters never enter the public repository.
+"""
+bundled_catalog() = joinpath(pkgdir(Legato), "data", "pulses")
+
 # ============================================================================
 # Query & ranking
 # ============================================================================ #
@@ -1213,5 +1228,111 @@ end
         bare, meta2 = load_pulse(entry_dir)
         @test bare isa ZeroOrderPulse
         @test meta2.id == meta.id
+    end
+end
+
+@testitem "bundled library — completeness and schema" begin
+    using Legato
+    using Legato: bundled_catalog, find_pulses, read_entry
+
+    partition = bundled_catalog()
+    isdir(partition) || error("bundled catalog partition missing")
+
+    # The solved set (verification-recorded) and the analytic seed set
+    solved = ["transmon-$g-generic-v1" for g in (:X, :Y, :SX, :H)]
+    analytic = ["transmon-$g-drag-generic-v1" for g in (:X, :Y, :SX, :SY)]
+    for id in vcat(solved, analytic)
+        entry = read_entry(joinpath(partition, id))
+        @test entry.tier == "bundled"
+        @test entry.device_id == "generic-transmon-1q"
+        @test entry.platform == "transmon"
+        isfile(joinpath(partition, id, "pulse.jld2")) ||
+            error("$id missing its pulse binary")
+    end
+    for id in solved
+        entry = read_entry(joinpath(partition, id))
+        @test entry.verification !== nothing
+        # The INTENT 1Q quality bar, recorded at build time
+        @test entry.verification.rollout_fidelity ≥ 0.9999
+    end
+    for id in analytic
+        entry = read_entry(joinpath(partition, id))
+        # Analytic seeds carry NO fidelity claim — empty verification is the
+        # distinction, and the ranking treats them accordingly
+        @test entry.verification === nothing
+        @test "analytic-seed" in entry.tags
+    end
+
+    # It is a standard partition: queryable
+    hits = find_pulses(partition; platform = "transmon", gate = "X")
+    @test "transmon-X-generic-v1" in [e.id for e in hits]
+end
+
+@testitem "bundled library — IP lint (allowlist enforcement)" begin
+    using Legato
+    using TOML
+    using Legato: bundled_catalog, read_entry, compute_system_hash
+
+    # The allowlist: device parameterizations cleared for public bundling.
+    # Adding a profile is a deliberate, human-reviewed PR action; the lint
+    # fails if any bundled entry's hash matches no allowlisted profile.
+    allowlist = TOML.parsefile(joinpath(bundled_catalog(), "allowlist.toml"))
+    @test !isempty(allowlist["profile"])
+    for p in allowlist["profile"]
+        # human-auditable: every profile states its provenance
+        @test p["provenance"] isa AbstractString && !isempty(p["provenance"])
+    end
+    allowed_hashes = Set(
+        compute_system_hash(
+            TransmonDevice(
+                p["name"],
+                TransmonQubit.(p["omega"], p["delta"], p["levels"]),
+                [CouplingEdge(c...) for c in p["couplings"]],
+                Dict{Symbol,Legato.GateSpec}(),
+                p["drive_max"],
+                [1.0],
+                [1.0],
+            ),
+            [1],
+        ) for p in allowlist["profile"]
+    )
+
+    for entry_dir in readdir(bundled_catalog(); join = true)
+        isdir(entry_dir) || continue
+        entry = read_entry(entry_dir)
+        entry.system_hash in allowed_hashes || error(
+            "IP LINT FAILURE: $(entry.id) references device parameters that " *
+            "match no allowlisted profile — partner-device parameters never " *
+            "enter the public bundle",
+        )
+    end
+end
+
+@testitem "bundled library — loads with validation-on-load" begin
+    using Legato
+    using TOML
+    using Legato: bundled_catalog, load_pulse, compute_system_hash, validate_hash!
+
+    # The allowlisted generic device, reconstructed from the allowlist itself
+    allowlist = TOML.parsefile(joinpath(bundled_catalog(), "allowlist.toml"))
+    p = only(allowlist["profile"])
+    device = TransmonDevice(
+        p["name"],
+        TransmonQubit.(p["omega"], p["delta"], p["levels"]),
+        [CouplingEdge(c...) for c in p["couplings"]],
+        Dict{Symbol,Legato.GateSpec}(),
+        p["drive_max"],
+        [1.0],
+        [1.0],
+    )
+    # Every solved entry loads against its own device, hash-validated
+    for g in (:X, :Y, :SX, :H)
+        pulse, entry = load_pulse(
+            joinpath(bundled_catalog(), "transmon-$g-generic-v1");
+            device = device,
+            subsystem = [1],
+        )
+        @test pulse isa Legato.Piccolo.AbstractPulse
+        @test entry.verification.rollout_fidelity ≥ 0.9999
     end
 end

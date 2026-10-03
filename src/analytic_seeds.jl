@@ -6,12 +6,13 @@
 # Seeds carry NO fidelity claim. They are initial guesses for optimization —
 # an entry banked from one is analytic-tier with an empty verification record.
 #
-# Unit convention (load-bearing, matches Piccolo's): drive amplitudes are
-# angular GHz and time is ns, so a constant in-plane drive u for time T
-# rotates the qubit by θ = 2·u·T — π pulses of duration T need peak
-# u = θ/(2T) rectangular, or u = θ/T on a sin² envelope (which averages to
-# half its peak: ∫sin² = T/2, so the DRAG form needs 2× the rectangular peak
-# at equal rotation — its price for smooth edges).
+# Unit convention (load-bearing, matches Piccolo's assembled systems): drive
+# amplitudes are cycles-GHz and Piccolo multiplies by 2π internally
+# (H_drives = 2π·(a+a†)-class generators), so a constant in-plane drive u for
+# time T rotates the qubit by θ = 4π·u·T. A π pulse of duration T needs peak
+# u = θ/(4πT) rectangular, or u = θ/(2πT) on a sin² envelope (which averages
+# to half its peak: ∫sin² = T/2, so the DRAG form needs 2× the rectangular
+# peak at equal rotation — its price for smooth edges).
 
 """
     _seed_rotation(gate)
@@ -37,7 +38,7 @@ end
 # sin² form, both zero at the boundary knots (zero-terminated), as
 # drives × knots control matrices.
 function _rectangular_controls(θ, φ, T, N, drive_max)
-    A = θ / (2T)
+    A = θ / (4π * T)
     A <= drive_max || throw(
         ArgumentError(
             "rotation θ = $(round(θ, digits = 4)) rad cannot complete within " *
@@ -53,7 +54,7 @@ function _rectangular_controls(θ, φ, T, N, drive_max)
 end
 
 function _drag_controls(θ, φ, T, N, drive_max, δ)
-    A = θ / T
+    A = θ / (2π * T)
     A <= drive_max || throw(
         ArgumentError(
             "rotation θ = $(round(θ, digits = 4)) rad cannot complete within " *
@@ -62,20 +63,21 @@ function _drag_controls(θ, φ, T, N, drive_max, δ)
         ),
     )
     times = collect(range(0.0, T, length = N))
-    # sin² envelope: naturally zero at both boundaries; rotation θ = A·T.
+    # sin² envelope: naturally zero at both boundaries; rotation θ = 2π·A·T.
     h = [A * sin(π * t / T)^2 for t in times]
     # DRAG quadrature via the DISCRETE knot derivative (central difference) —
     # the correction the PWC representation can actually express, not the
     # analytic derivative sampled onto the grid. First-order Motzoi
-    # coefficient c = 1/δ in Piccolo's δ>0 convention: empirically this
-    # drives leakage to numerical zero in the perturbative regime
-    # (peak ≲ δ/2) with a wide robust plateau in c.
+    # coefficient c = 1/(2πδ) — the detuning in angular units — in Piccolo's
+    # cycles-GHz drive convention: empirically this drives leakage to
+    # numerical zero in the perturbative regime (peak ≲ δ/2) with a wide
+    # robust plateau in c.
     du = zeros(N)
     for k = 2:(N-1)
         du[k] = (h[k+1] - h[k-1]) / (times[k+1] - times[k-1])
     end
-    u1 = @. h * cos(φ) + (du / δ) * sin(φ)
-    u2 = @. h * sin(φ) - (du / δ) * cos(φ)
+    u1 = @. h * cos(φ) + (du / (2π * δ)) * sin(φ)
+    u2 = @. h * sin(φ) - (du / (2π * δ)) * cos(φ)
     peak = max(maximum(abs.(u1)), maximum(abs.(u2)))
     peak <= drive_max || throw(
         ArgumentError(
@@ -102,7 +104,7 @@ unbounded).
 
 The device method defaults from the profile: drive bound from the device,
 duration from the published native-gate spec when the gate has one — raised
-to the bound-feasible minimum θ/(2·drive_max) when the published duration
+to the bound-feasible minimum θ/(4π·drive_max) when the published duration
 cannot contain the rotation.
 """
 function rectangular_seed(θ::Real, φ::Real, T::Real, N::Int, drive_max::Real)
@@ -126,7 +128,7 @@ function rectangular_seed(
     else
         typemin(Int) |> Float64
     end
-    T = something(T, max(T_default, θ / (2device.drive_max)))
+    T = something(T, max(T_default, θ / (4π * device.drive_max)))
     return rectangular_seed(θ, φ, T, N, device.drive_max)
 end
 
@@ -136,7 +138,7 @@ end
     drag_seed(gate, device; T = nothing, N = 21)
 
 First-order DRAG seed: sin² envelope on the rotation's quadrature axis plus
-the first-order Motzoi correction (c = 1/δ, Piccolo's δ>0 convention) on the
+the first-order Motzoi correction (c = 1/(2πδ) — angular detuning in cycles-GHz drive units) on the
 orthogonal quadrature, computed as the **discrete knot derivative** — the
 correction the piecewise-constant representation can actually express.
 
@@ -152,7 +154,7 @@ The envelope's sin² form costs 2× the rectangular peak at equal rotation
 
 Device defaults: drive bound and δ from the device's first subsystem qubit,
 duration from the published native-gate spec — raised to the feasible minimum
-max(θ/drive_max, √(θπ/(δ·drive_max))) when the published duration cannot
+max(θ/(2π·drive_max), √(θ/(4π·δ·drive_max))) when the published duration cannot
 contain the pulse.
 """
 function drag_seed(θ::Real, φ::Real, T::Real, N::Int, drive_max::Real, δ::Real)
@@ -180,7 +182,7 @@ function drag_seed(
     end
     T = something(
         T,
-        max(T_default, θ / device.drive_max, sqrt(θ * π / (δ * device.drive_max))),
+        max(T_default, θ / (2π * device.drive_max), sqrt(θ / (4π * δ * device.drive_max))),
     )
     return drag_seed(θ, φ, T, N, device.drive_max, δ)
 end
@@ -212,7 +214,7 @@ end
 
     # Infeasible rotation errors loudly with the numbers named
     err = try
-        rectangular_seed(:X, 10.0, 21, drive_max)  # π needs 31.4 ns at 0.05
+        rectangular_seed(:X, 2.0, 21, drive_max)  # π needs peak 0.125 at 2 ns
         nothing
     catch e
         e
@@ -237,14 +239,16 @@ end
     using Legato: rectangular_seed, drag_seed
 
     device = HeronR3()
-    # HeronR3 publishes X at 25 ns, but π at drive_max=0.05 needs 31.4 ns —
-    # the default must rise to the feasible minimum, not silently overflow
+    # In Piccolo's cycles-GHz units the published 25 ns X IS feasible at the
+    # device's own drive bound (peak π/(4π·25) = 0.01 ≤ 0.05), so the device
+    # default takes the published duration directly
     rect = rectangular_seed(:X, device)
-    @test duration(rect) >= π / (2 * 0.05)
-    @test maximum(abs.(rect.controls.u)) <= 0.05 + 1e-12
+    @test duration(rect) ≈ 25.0
+    @test maximum(abs.(rect.controls.u)) ≤ 0.05 + 1e-12
 
     drag = drag_seed(:X, device)
-    @test maximum(abs.(drag.controls.u)) <= 0.05 + 1e-12
+    @test duration(drag) ≈ 25.0
+    @test maximum(abs.(drag.controls.u)) ≤ 0.05 + 1e-12
     # δ comes from the subsystem qubit: the DRAG quadrature is nonzero
     @test maximum(abs.(drag.controls.u[2, :])) > 0.0
 end
@@ -271,20 +275,20 @@ end
     using LinearAlgebra
     using Legato: rectangular_seed, drag_seed
 
-    # Canonical moderate-drive case: 3-level transmon, δ = 0.2, π rotation in
-    # T = 40 ns (peak/δ ≈ 0.39 — inside the documented first-order regime).
-    # Exact simulation of the piecewise-constant pulses: ordered product of
-    # per-knot matrix exponentials — no optimizer in the loop, rollout truth.
-    δ = 0.2;
-    T = 40.0;
+    # Canonical moderate-drive case: 3-level transmon, δ = 0.05, π rotation in
+    # T = 40 ns, simulated against Piccolo's own 2π-scaled generators (the
+    # probe-verified convention): ordered product of per-knot matrix
+    # exponentials — no optimizer in the loop, rollout truth.
+    δ = 0.05
+    T = 40.0
     N = 81
     a = zeros(ComplexF64, 3, 3)
     a[1, 2] = 1
     a[2, 3] = √2
     ad = transpose(a)
-    H_anh = -δ / 2 * ad * ad * a * a
-    G1 = a + ad
-    G2 = 1im * (a - ad)
+    H_anh = -2π * δ / 2 * ad * ad * a * a
+    G1 = 2π * (a + ad)
+    G2 = 2π * 1im * (a - ad)
     function simulate(pulse)
         times = collect(range(0.0, T, length = N))
         U = Matrix{ComplexF64}(I, 3, 3)
@@ -297,11 +301,11 @@ end
     end
     leak(U) = (abs2(U[3, 1]) + abs2(U[3, 2])) / 2
 
-    rect = rectangular_seed(:X, T, N, 0.05)
+    rect = rectangular_seed(:X, T, N, 0.1)
     drag = drag_seed(:X, T, N, 0.1, δ)
-    # both fit the bound; the DRAG seed's leakage is measurably (and stably)
-    # below the rectangular seed's at equal rotation — margin 4× for CI safety,
-    # measured suppression is ~20×
-    @test leak(simulate(rect)) > 4 * leak(simulate(drag))
+    # Both fit the bound; the DRAG seed's leakage is orders of magnitude below
+    # the rectangular seed's at equal rotation — margin 100× for CI safety,
+    # measured suppression at this operating point is ~2500×
+    @test leak(simulate(rect)) > 100 * leak(simulate(drag))
     @test leak(simulate(rect)) > 0.01  # the comparison is meaningful, not both-zero
 end
