@@ -200,6 +200,7 @@ include("classify.jl")
 include("build_problem.jl")
 include("pulse_library.jl")
 include("analytic_seeds.jl")
+include("random_circuits.jl")
 include("post_process.jl")
 include("strategy.jl")
 include("compile.jl")
@@ -232,6 +233,7 @@ export SeedProvenance, resolve_seed
 export set_default_catalog!, set_default_retarget!
 export bundled_catalog
 export rollout_pwc, freephase_gate_fidelity
+export random_circuit
 
 function __init__()
     register_strategy!(DEFAULT_STRATEGY)
