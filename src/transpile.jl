@@ -40,7 +40,14 @@ function to_native(circuit::GateCircuit, device::AbstractDevice)
     native = native_gate_set(device)
     out = GateOp[]
     for op in circuit.ops
-        if op.gate in native
+        if op.angle !== nothing
+            # Parametric gates (Rx/Ry/Rz/P/Cp) have no fixed rewrite into the
+            # native set — they ride through unchanged. The compiler's target
+            # is the circuit unitary (which resolves their angles), and
+            # free-phase compilation absorbs Z-class rotations as virtual-Z
+            # frame updates.
+            push!(out, op)
+        elseif op.gate in native
             push!(out, op)
         elseif haskey(_NATIVE_REWRITES, op.gate)
             replacement = _NATIVE_REWRITES[op.gate](op)

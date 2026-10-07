@@ -14,9 +14,14 @@ Gate names map to Piccolo's `GATES` via `resolve_gate`.
 struct GateOp
     gate::Symbol
     qubits::Tuple{Vararg{Int}}
+    # Parametric gates (Rx/Ry/Rz/P/Cp) carry their rotation angle; static
+    # gates (the gate table) carry nothing. Nothing downstream dispatches on
+    # the field being set except gate-matrix resolution.
+    angle::Union{Nothing,Float64}
 end
 
-GateOp(gate::Symbol, qubit::Int) = GateOp(gate, (qubit,))
+GateOp(gate::Symbol, qubits::Tuple{Vararg{Int}}) = GateOp(gate, qubits, nothing)
+GateOp(gate::Symbol, qubit::Int) = GateOp(gate, (qubit,), nothing)
 
 """
     GateCircuit(ops, n_qubits)
@@ -60,6 +65,25 @@ function resolve_gate(gate::Symbol)
     haskey(GATES, key) && return Matrix{ComplexF64}(GATES[key])
     haskey(EXTRA_GATES, key) && return EXTRA_GATES[key]
     error("Unknown gate :$gate. Available: $(keys(GATES)), $(keys(EXTRA_GATES))")
+end
+
+# Parametric gate matrices — the angle-dependent half of the gate table.
+function resolve_gate(gate::Symbol, θ::Float64)
+    c = cos(θ / 2)
+    s = sin(θ / 2)
+    return if gate === :Rx
+        ComplexF64[c -im*s; -im*s c]
+    elseif gate === :Ry
+        ComplexF64[c -s; s c]
+    elseif gate === :Rz
+        ComplexF64[exp(-im * θ / 2) 0; 0 exp(im * θ / 2)]
+    elseif gate === :P
+        ComplexF64[1 0; 0 exp(im * θ)]
+    elseif gate === :Cp
+        cp_gate(θ)
+    else
+        error("Unknown parametric gate :$gate. Parametric set: Rx, Ry, Rz, P, Cp")
+    end
 end
 
 """Controlled-phase gate CP(θ) = diag(1, 1, 1, e^{iθ})."""
@@ -141,7 +165,8 @@ function circuit_unitary(circuit::GateCircuit)
     D = 2^circuit.n_qubits
     U = Matrix{ComplexF64}(I, D, D)
     for op in circuit.ops
-        gate_mat = resolve_gate(op.gate)
+        gate_mat =
+            op.angle === nothing ? resolve_gate(op.gate) : resolve_gate(op.gate, op.angle)
         U = kron_embed(gate_mat, op.qubits, circuit.n_qubits) * U
     end
     return U
