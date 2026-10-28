@@ -12,18 +12,25 @@ end
 
 """
 Result of compiling a single circuit block to a pulse.
+
+`problem` is the solved Piccolo problem the pulse was extracted from (or
+`nothing` for a hand-built result) — exposed so callers can check the
+optimizer's own trajectory against an independent rollout of `pulse`.
 """
 struct BlockResult
     pulse::AbstractPulse
     fidelity::Float64
     n_qubits::Int
     seed::SeedProvenance
+    problem::Any
 end
 
-# Positional compat: direct construction predates provenance and defaults to
-# the cold branch.
+# Positional compat: direct construction predates provenance (defaults to the
+# cold branch) and the exposed problem (defaults to `nothing`).
 BlockResult(pulse, fidelity, n_qubits) =
     BlockResult(pulse, fidelity, n_qubits, SeedProvenance(:cold, nothing, ""))
+BlockResult(pulse, fidelity, n_qubits, seed::SeedProvenance) =
+    BlockResult(pulse, fidelity, n_qubits, seed, nothing)
 
 """
     resolve_seed(circuit, device, qubit_indices, times, n_drives) -> (pulse, SeedProvenance)
@@ -138,8 +145,10 @@ Compile a circuit block to a single optimized pulse on a device qubit subset.
 1. Build QuantumSystem from device
 2. Compute target unitary → EmbeddedOperator (multi-level)
 3. Cold-start pulse via `default_initial_pulse` (substrate: `ZeroOrderPulse`)
-4. UnitaryTrajectory → `build_problem` (substrate: `SmoothPulseProblem`) → solve!
-5. Extract optimized pulse
+4. UnitaryTrajectory → `default_integrator` + `build_problem`, both chosen from
+   the seed's basis (ZOH → exponential integrator + `SmoothPulseProblem`;
+   splines → `SplineIntegrator` + `SplinePulseProblem`) → solve!
+5. Extract optimized pulse; the solved problem rides along on `BlockResult.problem`
 """
 function compile_block(
     circuit::AbstractCircuit,
@@ -169,11 +178,16 @@ function compile_block(
 
     # 4. Trajectory → Problem → Solve
     qtraj = UnitaryTrajectory(sys, pulse, U_goal)
-    # Default integrator seam: Piccolo's BilinearIntegrator is adequate for
-    # 1-2 qubit problems. The private Legatissimo package overrides this via
-    # `set_default_integrator!` to install Piccolissimo's SplineIntegrator for
-    # multi-qubit compilation. Caller can also pass `integrator=` directly.
-    integ = integrator === nothing ? default_integrator(qtraj, N_knots) : integrator
+    # Default integrator seam: basis-aware substrate, overridable via
+    # `set_default_integrator!`; the seam receives the problem's globals
+    # (system globals + free-phase θ's). Caller can also pass `integrator=`.
+    integ =
+        integrator === nothing ?
+        default_integrator(
+            qtraj,
+            N_knots;
+            global_names = _problem_global_names(qtraj; free_phase = free_phase),
+        ) : integrator
     qcp = build_problem(
         circuit,
         device,
@@ -187,7 +201,7 @@ function compile_block(
     #    Legatissimo overrides with parallel multistart).
     result_pulse, fid = default_solver_strategy(qcp, qtraj; max_iter = max_iter)
 
-    return BlockResult(result_pulse, fid, n, seed)
+    return BlockResult(result_pulse, fid, n, seed, qcp)
 end
 
 """
@@ -288,11 +302,18 @@ function _compile_block_with_strategy(
 
     # 4. Integrator via the strategy's seam (unless caller passes one explicitly)
     qtraj = UnitaryTrajectory(sys, pulse, U_goal)
-    integ = integrator === nothing ? strat.integrator(qtraj, N_knots) : integrator
+    integ =
+        integrator === nothing ?
+        _call_integrator(
+            strat.integrator,
+            qtraj,
+            N_knots;
+            global_names = _problem_global_names(qtraj; free_phase = free_phase),
+        ) : integrator
 
     # 5. Problem via the strategy's build_problem seam.
     # Extra kwargs (R, ddu_bound, etc.) flow through from compile() to the
-    # underlying problem template (substrate: SmoothPulseProblem).
+    # underlying problem template (substrate: basis-aware Smooth/Spline).
     qcp = strat.build_problem(
         circuit,
         device,
@@ -306,7 +327,7 @@ function _compile_block_with_strategy(
 
     # 6. Solve via the strategy's solver_strategy seam
     result_pulse, fid = strat.solver_strategy(qcp, qtraj; max_iter = max_iter)
-    block = BlockResult(result_pulse, fid, n, seed)
+    block = BlockResult(result_pulse, fid, n, seed, qcp)
 
     # 7. Post-process chain
     ctx = PostProcessContext(circuit, device, qtraj, qcp)
@@ -320,23 +341,95 @@ end
 # ============================================================================ #
 # Tests
 # ============================================================================ #
-# Legato's default test suite uses Piccolo's BilinearIntegrator. Multi-qubit
-# integration tests live in the private Legatissimo package, which overrides
-# `default_integrator` with Piccolissimo's SplineIntegrator.
+# The substrate integrator is basis-aware: the pulse's interpolation basis picks
+# the integrator, so the optimizer integrates exactly the waveform the pulse
+# describes (ZOH → HermitianExponentialIntegrator, splines → SplineIntegrator).
 
-@testitem "default_integrator — substrate returns BilinearIntegrator" begin
+@testitem "default_integrator — substrate pairs the integrator with the pulse basis" begin
     using Legato
-    using Piccolo: BilinearIntegrator, UnitaryTrajectory, CubicSplinePulse, QuantumSystem
+    using Piccolo:
+        HermitianExponentialIntegrator,
+        SplineIntegrator,
+        UnitaryTrajectory,
+        ZeroOrderPulse,
+        LinearSplinePulse,
+        CubicSplinePulse,
+        QuantumSystem
+    using Piccolo.Control.QuantumIntegrators.SplineIntegrators: spline_order
 
     σz = ComplexF64[1 0; 0 -1]
     σx = ComplexF64[0 1; 1 0]
     sys = QuantumSystem(σz, [σx], [1.0])
     times = collect(range(0.0, 10.0, length = 5))
-    pulse = CubicSplinePulse(zeros(1, 5), zeros(1, 5), times)
-    qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
+    I2 = ComplexF64[1 0; 0 1]
 
-    integ = Legato.default_integrator(qtraj, 5)
-    @test integ isa BilinearIntegrator
+    zoh = UnitaryTrajectory(sys, ZeroOrderPulse(zeros(1, 5), times), I2)
+    @test Legato.default_integrator(zoh, 5) isa HermitianExponentialIntegrator
+
+    lin = UnitaryTrajectory(sys, LinearSplinePulse(zeros(1, 5), times), I2)
+    integ = Legato.default_integrator(lin, 5)
+    @test integ isa SplineIntegrator
+    @test spline_order(integ) == 1
+
+    cub = UnitaryTrajectory(sys, CubicSplinePulse(zeros(1, 5), zeros(1, 5), times), I2)
+    integ = Legato.default_integrator(cub, 5)
+    @test integ isa SplineIntegrator
+    @test spline_order(integ) == 3
+end
+
+@testitem "default_integrator — carries problem globals; legacy (qtraj, N) builders still work" begin
+    using Legato
+    using Piccolo:
+        UnitaryTrajectory,
+        ZeroOrderPulse,
+        QuantumSystem,
+        EmbeddedOperator,
+        SmoothPulseProblem,
+        PiccoloOptions,
+        QuantumControlProblem
+
+    σz = ComplexF64[1 0; 0 -1]
+    σx = ComplexF64[0 1; 1 0]
+    sys = QuantumSystem(σz, [σx], [1.0])
+    times = collect(range(0.0, 10.0, length = 5))
+    qtraj = UnitaryTrajectory(
+        sys,
+        ZeroOrderPulse(zeros(1, 5), times),
+        EmbeddedOperator(σx, 1:2, 2),
+    )
+
+    # The free-phase θ globals the template adds are what the exponential
+    # integrator must declare; the seam names them so a free-phase ZOH
+    # problem builds.
+    names = Legato._problem_global_names(qtraj; free_phase = true)
+    @test names == [:φ_1]
+    integ = Legato.default_integrator(qtraj, 5; global_names = names)
+    qcp = SmoothPulseProblem(
+        qtraj,
+        5;
+        integrator = integ,
+        free_phase = true,
+        piccolo_options = PiccoloOptions(verbose = false),
+    )
+    @test qcp isa QuantumControlProblem
+    @test Legato._problem_global_names(qtraj; free_phase = false) == Symbol[]
+
+    # A builder accepting `global_names` receives them through the seam ...
+    seen = Ref{Any}(:unset)
+    kw_builder = (qt, N; global_names = nothing) -> (seen[] = global_names; :kw)
+    @test Legato._call_integrator(kw_builder, qtraj, 5; global_names = names) === :kw
+    @test seen[] == names
+    # ... while a legacy positional builder (the `set_default_integrator!`
+    # contract downstream tiers install) is still called as `(qtraj, N)`.
+    legacy = (qt, N) -> :legacy
+    @test Legato._call_integrator(legacy, qtraj, 5; global_names = names) === :legacy
+    saved = Legato._DEFAULT_INTEGRATOR[]
+    try
+        set_default_integrator!(legacy)
+        @test Legato.default_integrator(qtraj, 5; global_names = names) === :legacy
+    finally
+        set_default_integrator!(saved)
+    end
 end
 
 @testitem "default_initial_pulse — substrate returns zero-boundary ZeroOrderPulse" begin
@@ -385,7 +478,7 @@ end
     times = collect(range(0.0, 10.0, length = 5))
     pulse = CubicSplinePulse(zeros(1, 5), zeros(1, 5), times)
     qtraj = UnitaryTrajectory(sys, pulse, ComplexF64[1 0; 0 1])
-    qcp = SplinePulseProblem(qtraj; Legato._pwc_dynamics_kwargs()...)
+    qcp = SplinePulseProblem(qtraj)
 
     result_pulse, fid = Legato.default_solver_strategy(qcp, qtraj; max_iter = 2)
 
@@ -781,5 +874,113 @@ end
         @test occursin("library (transmon-X-v1)", sprint(show, report))
     finally
         set_default_catalog!(nothing)
+    end
+end
+
+# ——— Basis-faithful compilation ———————————————————————————————————————— #
+
+@testitem "compile_block — ZOH seed: exact integrator, solved problem exposed, rollout agrees" begin
+    using Legato
+    using Piccolo:
+        QuantumControlProblem,
+        SmoothPulseProblem,
+        ZeroOrderPulse,
+        MultiTransmonSystem,
+        get_trajectory,
+        iso_vec_to_operator
+
+    device = HeronR3(n_levels = 2)
+    circuit = GateCircuit([GateOp(:H, (1,))], 1)  # outside the analytic set → cold ZOH
+    block = compile_block(circuit, device, [1]; T_ns = 40.0, N_knots = 11, max_iter = 50)
+
+    @test block.seed.branch === :cold
+    @test block.pulse isa ZeroOrderPulse
+    @test block.problem isa SmoothPulseProblem
+    # Divergence check the exposed problem enables: the exact PWC rollout of
+    # the extracted pulse reproduces the optimizer's own final propagator.
+    traj = get_trajectory(block.problem)
+    U_opt = iso_vec_to_operator(traj[:Ũ⃗][:, end])
+    U_roll = rollout_pwc(block.pulse, MultiTransmonSystem(device, [1]))
+    @test maximum(abs.(U_opt - U_roll)) < 1e-6
+end
+
+@testitem "compile_block — spline seed builds a spline problem with the spline integrator" begin
+    using Legato
+    using Piccolo: CubicSplinePulse, LinearSplinePulse, SplinePulseProblem
+
+    device = HeronR3(n_levels = 2)
+    circuit = GateCircuit([GateOp(:H, (1,))], 1)
+    for P in (LinearSplinePulse, CubicSplinePulse)
+        Legato.set_default_initial_pulse!(
+            (c, d, ts, n) ->
+                P === CubicSplinePulse ?
+                CubicSplinePulse(
+                    zeros(n, length(ts)),
+                    zeros(n, length(ts)),
+                    ts;
+                    initial_value = zeros(n),
+                    final_value = zeros(n),
+                ) :
+                LinearSplinePulse(
+                    zeros(n, length(ts)),
+                    ts;
+                    initial_value = zeros(n),
+                    final_value = zeros(n),
+                ),
+        )
+        try
+            block =
+                compile_block(circuit, device, [1]; T_ns = 40.0, N_knots = 11, max_iter = 2)
+            @test block.seed.branch === :override
+            @test block.problem isa SplinePulseProblem
+            @test block.pulse isa P
+            @test 0.0 ≤ block.fidelity ≤ 1.0
+        finally
+            Legato._DEFAULT_INITIAL_PULSE[] = Legato._substrate_default_initial_pulse
+        end
+    end
+end
+
+@testitem "compile — strategy path threads globals to the integrator seam and exposes the problem" begin
+    using Legato
+    using Piccolo: ZeroOrderPulse
+
+    circuit = GateCircuit([GateOp(:H, (1,))], 1)
+    device = HeronR3(n_levels = 2)
+    seen = Ref{Any}(:unset)
+    stub = Legato.CompilationStrategy(
+        name = :stub_globals_test,
+        matches = (c, d) -> 0.0,
+        integrator = (qt, N; global_names = nothing) -> (seen[] = global_names; :integ),
+        partitioner = (c, d) -> Legato.BlockSpec[Legato.BlockSpec(c, [1])],
+        build_problem = (c, d, qt; kw...) -> :stub_problem,
+        solver_strategy = (problem, qt; max_iter) -> (qt.pulse, 0.5),
+    )
+    Legato.register_strategy!(stub)
+    try
+        block = Legato._compile_block_with_strategy(
+            stub,
+            circuit,
+            device,
+            [1];
+            T_ns = 20.0,
+            N_knots = 5,
+            max_iter = 1,
+        )
+        @test seen[] == [:φ_1]  # free_phase = true by default
+        @test block.problem === :stub_problem
+        Legato._compile_block_with_strategy(
+            stub,
+            circuit,
+            device,
+            [1];
+            T_ns = 20.0,
+            N_knots = 5,
+            max_iter = 1,
+            free_phase = false,
+        )
+        @test seen[] == Symbol[]
+    finally
+        Legato.unregister_strategy!(:stub_globals_test)
     end
 end

@@ -126,8 +126,8 @@ Legato is a substrate that runs *productively on small problems* with no proprie
 | Device profiles (`HeronR3`, `HeronR2`, `IQMEmerald`) | ✅ | — |
 | `to_native` transpile pass | ✅ | — |
 | `compile_block` substrate pipeline | ✅ | — |
-| `BilinearIntegrator` (cold-start, 1-2Q) | ✅ substrate | — |
-| `SplineIntegrator` (multi-qubit scaling) | — | ✅ |
+| Basis-aware integrator + problem (ZOH → `HermitianExponentialIntegrator` + `SmoothPulseProblem`; splines → `SplineIntegrator` + `SplinePulseProblem`) | ✅ substrate | — |
+| Multi-qubit scaling overrides | — | ✅ |
 | Pulse catalog warm-starts | — | ✅ |
 | Graph-based partitioning | — | ✅ |
 | Parallel multistart solver | — | ✅ |
@@ -156,7 +156,7 @@ using Pkg
 Pkg.add("Legato")
 ```
 
-For multi-qubit problems Legato's default `BilinearIntegrator` can exhaust memory during evaluator construction. Harmoniqs collaborators with access to `Piccolissimo.jl` can swap in a scalable spline-based integrator by loading Legatissimo, which auto-installs the override on `__init__`.
+Legato's default integrator follows the seed pulse's basis, so the optimizer integrates exactly the waveform the pulse describes (a `ZeroOrderPulse` with the exact exponential integrator, a spline pulse with `SplineIntegrator` of the pulse's order). Exact piecewise-constant integration can exhaust memory on 3+ qubit problems; Harmoniqs collaborators can load Legatissimo, which installs its own builder via `set_default_integrator!` on `__init__`.
 
 ## Status
 

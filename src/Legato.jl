@@ -19,13 +19,18 @@ using Piccolo:
     get_subspace_indices,
     # Pulses
     AbstractPulse,
+    AbstractSplinePulse,
     CubicSplinePulse,
+    LinearSplinePulse,
     ZeroOrderPulse,
     n_drives,
+    get_pulse,
+    get_system,
     # Trajectories
     UnitaryTrajectory,
     # Integrators
-    BilinearIntegrator,
+    HermitianExponentialIntegrator,
+    SplineIntegrator,
     # Problems
     SmoothPulseProblem,
     SplinePulseProblem,
@@ -43,31 +48,109 @@ using Piccolo:
 using Piccolo.Quantum.Pulses: duration
 
 """
-    default_integrator(qtraj, N)
+    default_integrator(qtraj, N; global_names = nothing)
 
-Return the integrator used by `compile_block`. Default: Piccolo's `BilinearIntegrator`,
-adequate for 1-2 qubit problems. When the private `Legatissimo` package is
-loaded, its `__init__` installs a `SplineIntegrator` builder via
-[`set_default_integrator!`](@ref), which scales to 3+ qubit compilation without
-exhausting memory during evaluator construction.
+Return the integrator used by `compile_block`. The substrate default is
+**basis-aware**: the pulse's interpolation basis picks the integrator, so the
+optimizer integrates exactly the waveform the pulse describes (Piccolo #375's
+exact pairing — no approximation is declared anywhere on the compile path):
 
-Users who want a different integrator can either load Legatissimo or call
-`set_default_integrator!` with a custom builder `(qtraj, N) -> integrator`.
+| pulse               | integrator                                           |
+|:--------------------|:-----------------------------------------------------|
+| `ZeroOrderPulse`    | `HermitianExponentialIntegrator` (exact PWC)         |
+| `LinearSplinePulse` | `SplineIntegrator`, `spline_order = 1`               |
+| `CubicSplinePulse`  | `SplineIntegrator`, `spline_order = 3` (reads `:du`) |
+
+`global_names` are the problem trajectory's global variables (system
+`global_params` plus the free-phase θ's the template adds — see
+`_problem_global_names`). The exponential integrator must declare exactly
+those; the spline integrator auto-detects the system's own globals and treats
+the free-phase θ's as objective-only, so it ignores them.
+
+Downstream tiers (Legatissimo) or callers install a different builder with
+[`set_default_integrator!`](@ref).
 """
-default_integrator(qtraj, N) = _DEFAULT_INTEGRATOR[](qtraj, N)
+default_integrator(qtraj, N; global_names = nothing) =
+    _call_integrator(_DEFAULT_INTEGRATOR[], qtraj, N; global_names = global_names)
 
-# Mutable default builder — swapped by Legatissimo's `__init__` at load time.
-# We indirect through a Ref-held builder function so downstream packages can
-# install overrides without redefining methods on types they don't own.
-const _DEFAULT_INTEGRATOR = Ref{Any}((qtraj, N) -> BilinearIntegrator(qtraj, N))
+# Builders are called with `global_names` when they accept it, otherwise with
+# the legacy `(qtraj, N)` positional contract — so builders installed before
+# the seam carried globals keep working unchanged.
+function _call_integrator(builder, qtraj, N; global_names = nothing)
+    hasmethod(builder, Tuple{typeof(qtraj),typeof(N)}, (:global_names,)) &&
+        return builder(qtraj, N; global_names = global_names)
+    return builder(qtraj, N)
+end
+
+_substrate_default_integrator(qtraj, N; global_names = nothing) =
+    _basis_integrator(get_pulse(qtraj), qtraj, N, global_names)
+
+_basis_integrator(::ZeroOrderPulse, qtraj, N, global_names) =
+    HermitianExponentialIntegrator(
+        _exponential_trajectory(get_system(qtraj), qtraj),
+        N;
+        global_names = global_names,
+    )
+_basis_integrator(::LinearSplinePulse, qtraj, N, global_names) =
+    SplineIntegrator(qtraj, N; spline_order = 1)
+_basis_integrator(::CubicSplinePulse, qtraj, N, global_names) =
+    SplineIntegrator(qtraj, N; spline_order = 3)
+_basis_integrator(pulse, qtraj, N, global_names) = throw(
+    ArgumentError(
+        "default_integrator: no exact integrator for a $(nameof(typeof(pulse))); " *
+        "seed a ZeroOrderPulse, LinearSplinePulse or CubicSplinePulse, or install " *
+        "a builder with `set_default_integrator!`.",
+    ),
+)
+
+# `CompositeQuantumSystem`'s generator closures do not truncate the extended
+# control vector `[u; globals]` the exponential integrator passes them (a plain
+# `QuantumSystem`'s do), so a free-phase ZOH solve on a composite system fails
+# with a DimensionMismatch. Integrate against the identical flat system. Only
+# global-free systems are flattened: the flat copy carries no `global_params`.
+_exponential_trajectory(sys, qtraj) = qtraj
+function _exponential_trajectory(sys::CompositeQuantumSystem, qtraj::UnitaryTrajectory)
+    isempty(sys.global_params) || return qtraj
+    flat = QuantumSystem(
+        Matrix(sys.H_drift),
+        [Matrix(drive.H) for drive in sys.H_drives],
+        sys.drive_bounds,
+    )
+    return UnitaryTrajectory(flat, get_pulse(qtraj), qtraj.goal)
+end
+
+"""
+    _problem_global_names(qtraj; free_phase) -> Vector{Symbol}
+
+The global variables a Piccolo problem template adds to the trajectory for
+`qtraj`: the system's `global_params` plus, under `free_phase`, one phase per
+subsystem of an `EmbeddedOperator` goal (`φ_1 … φ_n`, Piccolo's
+`setup_free_phase_globals!` convention). Passed to the integrator seam so
+globals-aware integrators declare exactly the trajectory's globals.
+"""
+function _problem_global_names(qtraj; free_phase::Bool)
+    names = collect(Symbol, keys(get_system(qtraj).global_params))
+    free_phase &&
+        qtraj isa UnitaryTrajectory &&
+        qtraj.goal isa EmbeddedOperator &&
+        append!(names, [Symbol(:φ_, i) for i = 1:length(qtraj.goal.subsystem_levels)])
+    return names
+end
+
+# Mutable default builder — downstream packages swap it via
+# `set_default_integrator!`. We indirect through a Ref-held builder function so
+# they can install overrides without redefining methods on types they don't own.
+const _DEFAULT_INTEGRATOR = Ref{Any}(_substrate_default_integrator)
 
 """
     set_default_integrator!(builder)
 
-Install a new builder function for [`default_integrator`](@ref). `builder` must
-accept `(qtraj, N)` and return an `AbstractIntegrator`. Intended primarily for
-use by the private `Legatissimo` package, but callers can also use it to
-plug in custom integrators without editing Legato source.
+Install a new builder function for [`default_integrator`](@ref). `builder`
+accepts `(qtraj, N)` and returns an `AbstractIntegrator`; if it also accepts a
+`global_names` keyword it receives the problem trajectory's globals (see
+[`default_integrator`](@ref)). Intended primarily for the private `Legatissimo`
+package, but callers can also use it to plug in custom integrators without
+editing Legato source.
 """
 set_default_integrator!(builder) = (_DEFAULT_INTEGRATOR[] = builder; builder)
 
@@ -104,18 +187,6 @@ hash-exact match). Returning `nothing` declines the retarget and the chain
 falls through to analytic — never an error. `nothing` uninstalls.
 """
 set_default_retarget!(f::Union{Nothing,Function}) = (_DEFAULT_RETARGET[] = f)
-
-# Substrate dynamics are knot-only (PWC): the optimizer drives knot values,
-# never a spline's derivative coefficients. Piccolo ≥ 2 requires that contract
-# to be stated explicitly (`integrator_type = :pwc`) — composing a
-# CubicSplinePulse with BilinearIntegrator is a hard error there, and a spline
-# problem's default-integrator path rejects cubic pulses outright (Piccolo
-# #275: the old silent :du drop became a loud guard). Piccolo 1.x predates the
-# kwarg and pairs Bilinear with spline pulses directly — identical knot-only
-# semantics. Both branches compute the same dynamics.
-function _pwc_dynamics_kwargs()
-    return pkgversion(Piccolo) >= v"2.0.0" ? (; integrator_type = :pwc) : (;)
-end
 
 """
     default_initial_pulse(circuit, device, times, n_drives)

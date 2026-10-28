@@ -136,7 +136,7 @@ Byte-for-byte equivalent to Legato v0.2.1's `compile_block` behavior.
 """
 const DEFAULT_STRATEGY = CompilationStrategy(
     name = :default,
-    description = "Substrate: cold-start, whole-circuit, BilinearIntegrator. Fallback sentinel.",
+    description = "Substrate: cold-start, whole-circuit, basis-aware integrator + problem. Fallback sentinel.",
     matches = (circuit, device) -> 0.0,
     # All other fields take their keyword-constructor defaults (substrate seams).
 )

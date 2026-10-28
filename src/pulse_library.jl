@@ -446,7 +446,7 @@ partner-device parameters never enter the public repository.
 bundled_catalog() = joinpath(pkgdir(Legato), "data", "pulses")
 
 """
-    rollout_pwc(pulse, sys)
+    rollout_pwc(pulse::ZeroOrderPulse, sys)
 
 Exact rollout of a piecewise-constant pulse against a Piccolo system's own
 assembled generators (`sys.H_drift`, `sys.H_drives`): the ordered product of
@@ -454,8 +454,12 @@ per-knot matrix exponentials — the PWC dynamics **exactly**, with no solver
 and no optimizer in the loop. This is the verification primitive the
 bank's promises are measured with (build-time bundle verification, the
 seed-efficacy contract tests, and the benchmark surface all share it).
+
+Typed to `ZeroOrderPulse`: a spline pulse is not piecewise constant, and
+rolling its knots out as PWC would verify a different waveform than the pulse
+describes — that is a `MethodError`, not a silent approximation.
 """
-function rollout_pwc(pulse, sys)
+function rollout_pwc(pulse::ZeroOrderPulse, sys)
     H_drift = Matrix(sys.H_drift)
     H_drives = [Matrix(drive.H) for drive in sys.H_drives]
     t = pulse.controls.t
@@ -1491,4 +1495,20 @@ end
     # reasonable refactor of either construction.
     @test F_analytic ≥ 0.999
     @test F_analytic > F_cold + 0.05
+end
+
+@testitem "rollout_pwc — typed to ZeroOrderPulse (no silent PWC verification of splines)" begin
+    using Legato: rollout_pwc
+    using Piccolo: QuantumSystem, ZeroOrderPulse, CubicSplinePulse, LinearSplinePulse
+
+    σz = ComplexF64[1 0; 0 -1]
+    σx = ComplexF64[0 1; 1 0]
+    sys = QuantumSystem(σz, [σx], [1.0])
+    times = collect(range(0.0, 1.0, length = 3))
+    @test rollout_pwc(ZeroOrderPulse(zeros(1, 3), times), sys) ≈ exp(-im * σz * 1.0)
+    @test_throws MethodError rollout_pwc(
+        CubicSplinePulse(zeros(1, 3), zeros(1, 3), times),
+        sys,
+    )
+    @test_throws MethodError rollout_pwc(LinearSplinePulse(zeros(1, 3), times), sys)
 end
